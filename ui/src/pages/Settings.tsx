@@ -56,16 +56,16 @@ export default function Settings() {
   }, [pref]);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900">설정</h1>
+    <div className="page-shell max-w-4xl">
+      <h1 className="section-title">설정</h1>
 
       <div className="card space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-600">전략/리스크 설정</h2>
+          <h2 className="text-sm font-bold text-slate-700">전략/리스크 설정</h2>
           {config?.is_paper_trading ? (
-            <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">PAPER</span>
+            <span className="chip">PAPER</span>
           ) : (
-            <span className="text-xs px-2 py-1 rounded-full bg-red-100 text-red-700">REAL</span>
+            <span className="rounded-full bg-red-100 px-2.5 py-1 text-[11px] font-semibold text-red-700">REAL</span>
           )}
         </div>
 
@@ -122,17 +122,13 @@ export default function Settings() {
           </div>
         </div>
 
-        <button
-          className="px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-60"
-          disabled={configMutation.isPending}
-          onClick={() => configMutation.mutate(form)}
-        >
+        <button className="btn-primary disabled:opacity-60" disabled={configMutation.isPending} onClick={() => configMutation.mutate(form)}>
           {configMutation.isPending ? "저장 중..." : "설정 저장"}
         </button>
       </div>
 
       <div className="card space-y-4">
-        <h2 className="text-sm font-semibold text-gray-600">Telegram 알림 설정</h2>
+        <h2 className="text-sm font-bold text-slate-700">Telegram 알림 설정</h2>
 
         {[
           { key: "morning_brief", label: "아침 브리핑 (08:30)" },
@@ -155,17 +151,13 @@ export default function Settings() {
           </label>
         ))}
 
-        <button
-          className="px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-60"
-          disabled={prefMutation.isPending}
-          onClick={() => prefMutation.mutate(notifForm)}
-        >
+        <button className="btn-primary disabled:opacity-60" disabled={prefMutation.isPending} onClick={() => prefMutation.mutate(notifForm)}>
           {prefMutation.isPending ? "저장 중..." : "알림 설정 저장"}
         </button>
       </div>
 
       <div className="card space-y-4">
-        <h2 className="text-sm font-semibold text-gray-600">실거래 전환</h2>
+        <h2 className="text-sm font-bold text-slate-700">실거래 전환</h2>
         <p className="text-xs text-gray-500">
           전환 시 confirmation code + readiness 통과가 모두 필요합니다.
         </p>
@@ -200,7 +192,7 @@ export default function Settings() {
 
         <div className="flex gap-2">
           <button
-            className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-2xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
             disabled={modeMutation.isPending}
             onClick={() =>
               modeMutation.mutate({
@@ -212,7 +204,7 @@ export default function Settings() {
             실거래 전환
           </button>
           <button
-            className="px-4 py-2 bg-gray-700 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-60"
+            className="btn-secondary disabled:opacity-60"
             disabled={modeMutation.isPending}
             onClick={() =>
               modeMutation.mutate({

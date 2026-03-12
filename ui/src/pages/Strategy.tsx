@@ -47,17 +47,14 @@ export default function Strategy() {
   const rounds = [...roundSet].sort((a, b) => a - b);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900">전략 현황</h1>
+    <div className="page-shell">
+      <h1 className="section-title">전략 현황</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Strategy A */}
         <div className="space-y-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg">🏆</span>
-            <h2 className="text-base font-semibold text-gray-800">
-              Strategy A — Tournament
-            </h2>
+            <h2 className="text-base font-bold text-slate-800">Strategy A · Tournament</h2>
           </div>
           <TournamentTable />
         </div>
@@ -65,10 +62,7 @@ export default function Strategy() {
         {/* Strategy B */}
         <div className="space-y-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg">💬</span>
-            <h2 className="text-base font-semibold text-gray-800">
-              Strategy B — Consensus/Debate
-            </h2>
+            <h2 className="text-base font-bold text-slate-800">Strategy B · Consensus / Debate</h2>
           </div>
 
           {strategyBLoading ? (

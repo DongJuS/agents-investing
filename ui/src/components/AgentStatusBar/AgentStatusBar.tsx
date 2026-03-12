@@ -55,15 +55,18 @@ export default function AgentStatusBar() {
 
   return (
     <div className="card">
-      <h3 className="text-sm font-semibold text-gray-500 mb-3">에이전트 상태</h3>
-      <div className="flex flex-wrap gap-3">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-bold text-slate-800">에이전트 상태</h3>
+        <span className="text-[11px] font-semibold text-slate-500">실시간 모니터링</span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {agents?.map((agent) => (
           <div
             key={agent.agent_id}
-            className="border border-gray-100 rounded-xl px-2.5 py-2 min-w-[148px]"
+            className="rounded-2xl border border-slate-100 bg-white/75 px-3 py-3 shadow-[0_6px_14px_rgba(15,23,42,0.06)]"
             title={agent.last_action ?? ""}
           >
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
               <span
                 className={
                   agent.status === "healthy"
@@ -73,15 +76,16 @@ export default function AgentStatusBar() {
                     : "dot-dead"
                 }
               />
-              <span className="text-xs text-gray-700 font-medium">
+              <span className="text-xs font-semibold text-slate-700">
                 {AGENT_LABELS[agent.agent_id] ?? agent.agent_id}
               </span>
             </div>
-            <div className="mt-1.5">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${activityBadgeClass(agent.activity_state)}`}>
+            <div className="mt-2">
+              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${activityBadgeClass(agent.activity_state)}`}>
                 {agent.activity_label}
               </span>
             </div>
+            {agent.last_action && <p className="mt-2 truncate text-[11px] text-slate-500">{agent.last_action}</p>}
           </div>
         ))}
       </div>

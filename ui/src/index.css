@@ -3,49 +3,226 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --ink-900: #191f28;
+    --ink-700: #4e5968;
+    --ink-500: #8b95a1;
+    --line-soft: rgba(25, 31, 40, 0.08);
+    --line-strong: rgba(25, 31, 40, 0.14);
+    --brand-500: #3182f6;
+    --brand-600: #2468e8;
+    --brand-50: #e8f3ff;
+    --profit: #00b894;
+    --loss: #ff4d4f;
+  }
+
   * {
     box-sizing: border-box;
   }
 
+  #root {
+    min-height: 100vh;
+  }
+
   body {
-    @apply bg-gray-50 text-gray-900 font-sans;
+    font-family:
+      "Pretendard Variable",
+      "SUIT Variable",
+      "Spoqa Han Sans Neo",
+      "Apple SD Gothic Neo",
+      "Noto Sans KR",
+      sans-serif;
+    color: var(--ink-900);
+    background:
+      radial-gradient(1200px 460px at 88% -120px, rgba(49, 130, 246, 0.18), transparent 60%),
+      radial-gradient(900px 340px at -8% -24px, rgba(56, 189, 248, 0.16), transparent 56%),
+      linear-gradient(180deg, #f3f7ff 0%, #f7f9fc 42%, #f4f7fb 100%);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: #cde3ff;
+    color: #0f172a;
+  }
+
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    @apply w-full rounded-2xl border bg-white/90 px-3.5 py-2.5 text-sm;
+    border-color: var(--line-soft);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  }
+
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    border-color: rgba(49, 130, 246, 0.45);
+    box-shadow: 0 0 0 4px rgba(49, 130, 246, 0.16);
+    background: #fff;
   }
 }
 
 @layer components {
-  /* Toss 스타일 카드 */
+  .page-shell {
+    @apply mx-auto w-full max-w-[1120px] space-y-6 px-5 pb-10 pt-7 md:px-8;
+  }
+
+  .page-shell > * {
+    animation: page-rise 0.42s ease both;
+  }
+
+  .page-shell > *:nth-child(2) {
+    animation-delay: 0.04s;
+  }
+
+  .page-shell > *:nth-child(3) {
+    animation-delay: 0.08s;
+  }
+
+  .page-shell > *:nth-child(4) {
+    animation-delay: 0.12s;
+  }
+
+  .page-shell > *:nth-child(5) {
+    animation-delay: 0.16s;
+  }
+
+  .section-title {
+    @apply text-[26px] font-extrabold tracking-[-0.03em];
+    color: var(--ink-900);
+  }
+
+  .section-sub {
+    @apply text-sm;
+    color: var(--ink-500);
+  }
+
   .card {
-    @apply bg-white rounded-2xl shadow-sm border border-surface-border p-6;
+    @apply rounded-3xl border p-6;
+    border-color: var(--line-soft);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.92) 100%);
+    box-shadow:
+      0 10px 30px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
   }
 
-  /* 수익 / 손실 텍스트 */
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--line-strong);
+    box-shadow:
+      0 16px 34px rgba(15, 23, 42, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  }
+
+  .hero-card {
+    @apply relative overflow-hidden rounded-3xl border px-6 py-5 md:px-7;
+    border-color: rgba(49, 130, 246, 0.22);
+    background:
+      radial-gradient(520px 220px at 92% -34%, rgba(49, 130, 246, 0.24), transparent 66%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.97) 0%, rgba(247, 251, 255, 0.96) 100%);
+    box-shadow: 0 14px 34px rgba(36, 104, 232, 0.14);
+  }
+
+  .kpi-label {
+    @apply text-[12px] font-semibold tracking-wide;
+    color: var(--ink-500);
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold;
+    background: #eef4ff;
+    color: #1d4ed8;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-2xl px-4 py-2.5 text-sm font-semibold text-white;
+    background: linear-gradient(180deg, var(--brand-500) 0%, var(--brand-600) 100%);
+    box-shadow: 0 9px 18px rgba(36, 104, 232, 0.24);
+    transition: filter 0.2s ease, transform 0.2s ease;
+  }
+
+  .btn-primary:hover {
+    filter: brightness(0.98);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-2xl border px-4 py-2.5 text-sm font-semibold;
+    color: var(--ink-700);
+    border-color: var(--line-soft);
+    background: rgba(255, 255, 255, 0.9);
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--line-strong);
+    background: #fff;
+  }
+
   .text-profit {
-    @apply text-positive font-semibold;
+    @apply font-semibold;
+    color: var(--profit);
   }
+
   .text-loss {
-    @apply text-negative font-semibold;
+    @apply font-semibold;
+    color: var(--loss);
   }
 
-  /* 큰 숫자 (Toss 스타일) */
   .number-lg {
-    @apply text-3xl font-bold tabular-nums;
+    @apply text-3xl font-extrabold tabular-nums tracking-[-0.03em];
+    color: var(--ink-900);
   }
 
-  /* 시그널 배지 */
   .badge-buy {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800;
-  }
-  .badge-sell {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800;
-  }
-  .badge-hold {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600;
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold;
+    background: rgba(0, 184, 148, 0.16);
+    color: #047857;
   }
 
-  /* 에이전트 상태 점 */
-  .dot-healthy { @apply w-2 h-2 rounded-full bg-green-400 inline-block; }
-  .dot-degraded { @apply w-2 h-2 rounded-full bg-yellow-400 inline-block; }
-  .dot-dead { @apply w-2 h-2 rounded-full bg-red-400 inline-block; }
+  .badge-sell {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold;
+    background: rgba(255, 77, 79, 0.16);
+    color: #b42318;
+  }
+
+  .badge-hold {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold;
+    background: rgba(139, 149, 161, 0.17);
+    color: #4e5968;
+  }
+
+  .dot-healthy {
+    @apply inline-block h-2.5 w-2.5 rounded-full;
+    background: #00b894;
+    box-shadow: 0 0 0 4px rgba(0, 184, 148, 0.12);
+  }
+
+  .dot-degraded {
+    @apply inline-block h-2.5 w-2.5 rounded-full;
+    background: #f59e0b;
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.12);
+  }
+
+  .dot-dead {
+    @apply inline-block h-2.5 w-2.5 rounded-full;
+    background: #ef4444;
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.12);
+  }
+}
+
+@keyframes page-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

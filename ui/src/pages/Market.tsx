@@ -161,21 +161,21 @@ export default function Market() {
   );
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900">시장 데이터</h1>
+    <div className="page-shell">
+      <h1 className="section-title">시장 데이터</h1>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {["kospi", "kosdaq"].map((key) => {
           const item = index?.[key as keyof IndexPayload];
           return (
             <div key={key} className="card">
-              <p className="text-xs text-gray-500 font-medium">{key.toUpperCase()}</p>
+              <p className="kpi-label">{key.toUpperCase()}</p>
               {indexLoading ? (
-                <div className="h-8 bg-gray-100 rounded mt-2 animate-pulse" />
+                <div className="mt-2 h-8 animate-pulse rounded-xl bg-slate-100" />
               ) : (
                 <>
                   <p className="number-lg mt-1">{item?.value?.toLocaleString("ko-KR") ?? "—"}</p>
-                  <p className={`text-sm font-medium mt-0.5 ${(item?.change_pct ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+                  <p className={`mt-0.5 text-sm font-semibold ${(item?.change_pct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
                     {item?.change_pct != null ? `${item.change_pct >= 0 ? "+" : ""}${item.change_pct.toFixed(2)}%` : "—"}
                   </p>
                 </>
@@ -188,14 +188,14 @@ export default function Market() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h2 className="text-base font-semibold text-gray-800">종목 OHLCV 차트</h2>
-            <p className="text-xs text-gray-500 mt-1">
+            <h2 className="text-base font-bold text-slate-800">종목 OHLCV 차트</h2>
+            <p className="mt-1 text-xs text-slate-500">
               {ohlcv?.name ? `${ohlcv.name} (${ohlcv.ticker})` : "종목 선택"} · {chartSource === "db" ? "내부 수집 DB" : "오픈소스 API(FDR)"}
             </p>
           </div>
           <div className="flex items-center gap-2">
             <select
-              className="border border-surface-border rounded-xl px-3 py-2 text-sm"
+              className="min-w-[172px]"
               value={activeTicker ?? ""}
               onChange={(e) => setSelectedTicker(e.target.value)}
               disabled={tickersLoading || !tickers?.length}
@@ -207,7 +207,7 @@ export default function Market() {
               ))}
             </select>
             <select
-              className="border border-surface-border rounded-xl px-3 py-2 text-sm"
+              className="min-w-[140px]"
               value={chartSource}
               onChange={(e) => setChartSource(e.target.value as ChartSource)}
             >
@@ -218,7 +218,7 @@ export default function Market() {
         </div>
 
         {ohlcvLoading || chartData.length === 0 ? (
-          <div className="h-72 bg-gray-50 rounded-xl animate-pulse" />
+          <div className="h-72 rounded-2xl bg-slate-100/80 animate-pulse" />
         ) : (
           <div className="space-y-4">
             <div className="h-72">
@@ -258,11 +258,11 @@ export default function Market() {
 
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">실시간 가격 추이</h2>
-          <p className="text-xs text-gray-500">5초 폴링 · Redis 실시간 캐시</p>
+          <h2 className="text-base font-bold text-slate-800">실시간 가격 추이</h2>
+          <p className="text-xs text-slate-500">5초 폴링 · Redis 실시간 캐시</p>
         </div>
         {realtimeLoading || realtimeData.length === 0 ? (
-          <div className="h-56 bg-gray-50 rounded-xl animate-pulse" />
+          <div className="h-56 rounded-2xl bg-slate-100/80 animate-pulse" />
         ) : (
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">

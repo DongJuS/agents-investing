@@ -44,16 +44,16 @@ export default function Portfolio() {
   );
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="page-shell">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">포트폴리오</h1>
+        <h1 className="section-title">포트폴리오</h1>
         <div className="flex items-center gap-2">
           {PERIOD_OPTIONS.map((item) => (
             <button
               key={item}
               onClick={() => setPeriod(item)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                period === item ? "bg-brand-600 text-white" : "bg-gray-100 text-gray-700"
+              className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
+                period === item ? "bg-blue-600 text-white" : "bg-white/75 text-slate-600 hover:bg-slate-100"
               }`}
             >
               {item}
@@ -62,27 +62,27 @@ export default function Portfolio() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium">수익률</p>
-          <p className={`number-lg mt-1 ${(perf?.return_pct ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
+          <p className="kpi-label">수익률</p>
+          <p className={`number-lg mt-1 ${(perf?.return_pct ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
             {perfLoading ? "—" : formatPct(perf?.return_pct ?? 0)}
           </p>
         </div>
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium">MDD</p>
-          <p className="number-lg mt-1 text-negative">{perfLoading ? "—" : formatPct(perf?.max_drawdown_pct ?? 0)}</p>
+          <p className="kpi-label">MDD</p>
+          <p className="number-lg mt-1 text-loss">{perfLoading ? "—" : formatPct(perf?.max_drawdown_pct ?? 0)}</p>
         </div>
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium">Sharpe</p>
+          <p className="kpi-label">Sharpe</p>
           <p className="number-lg mt-1 text-gray-900">
             {perfLoading ? "—" : perf?.sharpe_ratio == null ? "—" : perf.sharpe_ratio.toFixed(3)}
           </p>
         </div>
         <div className="card">
-          <p className="text-xs text-gray-500 font-medium">승률</p>
+          <p className="kpi-label">승률</p>
           <p className="number-lg mt-1 text-gray-900">{perfLoading ? "—" : `${Math.round((perf?.win_rate ?? 0) * 100)}%`}</p>
-          <p className="text-xs text-gray-500 mt-1">거래 {perf?.total_trades ?? 0}건</p>
+          <p className="mt-1 text-xs text-slate-500">거래 {perf?.total_trades ?? 0}건</p>
         </div>
       </div>
 

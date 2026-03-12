@@ -3,10 +3,10 @@
  */
 import { useTournament } from "@/hooks/useSignals";
 
-const LLM_ICONS: Record<string, string> = {
-  "claude-sonnet-4-6": "🟣",
-  "gpt-4o": "🟢",
-  "gemini-1.5-pro": "🔵",
+const LLM_BADGES: Record<string, string> = {
+  "claude-sonnet-4-6": "Claude",
+  "gpt-4o": "GPT",
+  "gemini-1.5-pro": "Gemini",
 };
 
 export default function TournamentTable() {
@@ -24,12 +24,12 @@ export default function TournamentTable() {
 
   return (
     <div className="card">
-      <h3 className="text-sm font-semibold text-gray-500 mb-4">
-        Strategy A 토너먼트 — 최근 {data?.period_days}일 누적 정확도
+      <h3 className="mb-4 text-sm font-bold text-slate-700">
+        Strategy A 토너먼트 · 최근 {data?.period_days}일 누적 정확도
       </h3>
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-xs text-gray-400 border-b border-surface-border">
+          <tr className="border-b border-surface-border text-left text-xs text-gray-400">
             <th className="pb-2 pr-3">순위</th>
             <th className="pb-2 pr-3">에이전트</th>
             <th className="pb-2 pr-3">모델</th>
@@ -41,17 +41,20 @@ export default function TournamentTable() {
           {data?.rankings.map((r, idx) => (
             <tr
               key={r.agent_id}
-              className={r.is_current_winner ? "bg-brand-50" : ""}
+              className={r.is_current_winner ? "bg-brand-50/60" : ""}
             >
               <td className="py-2.5 pr-3 font-bold text-gray-400">
                 {idx + 1}
               </td>
-              <td className="py-2.5 pr-3 font-medium text-gray-800">
-                {r.is_current_winner && "👑 "}
+              <td className="py-2.5 pr-3 font-semibold text-gray-800">
+                {r.is_current_winner && <span className="mr-1 text-blue-600">★</span>}
                 {r.persona}
               </td>
               <td className="py-2.5 pr-3 text-gray-500">
-                {LLM_ICONS[r.llm_model] ?? "🤖"} {r.llm_model}
+                <span className="mr-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                  {LLM_BADGES[r.llm_model] ?? "Model"}
+                </span>
+                {r.llm_model}
               </td>
               <td className="py-2.5 pr-3 text-right font-semibold">
                 {r.rolling_accuracy != null
