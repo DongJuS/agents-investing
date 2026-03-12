@@ -121,6 +121,9 @@ python -m src.agents.orchestrator --tickers 005930,000660
 
 # Orchestrator 토너먼트 모드 (Predictor 5개 인스턴스)
 python -m src.agents.orchestrator --tournament --tickers 005930,000660
+
+# Orchestrator 합의 모드 (Strategy B Debate)
+python -m src.agents.orchestrator --consensus --tickers 005930,000660
 ```
 
 ---

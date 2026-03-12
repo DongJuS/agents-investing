@@ -7,8 +7,8 @@
 
 ## 🎯 현재 스프린트 목표
 
-**Phase 3 — Strategy A 토너먼트 고도화**
-5개 Predictor 병렬 토너먼트 러너를 추가했고, 남은 작업은 실제 장중/장후 운영 스케줄 고도화입니다.
+**Phase 4 — Strategy B 합의/토론 고도화**
+Strategy A 기본 토너먼트와 Strategy B 기본 합의 러너를 구현했고, 남은 작업은 다라운드 토론·블렌딩 고도화입니다.
 
 ---
 
@@ -65,7 +65,7 @@
 ### ⏸️ 보류 / 차후
 
 - [~] **Phase 3:** Strategy A Tournament (5개 인스턴스 병렬) — 기본 구현 완료, 운영 고도화 잔여
-- [ ] **Phase 4:** Strategy B Consensus/Debate
+- [~] **Phase 4:** Strategy B Consensus/Debate — 기본 구현 완료, 다라운드/합의 임계치 고도화 잔여
 - [ ] **Phase 5:** Toss 스타일 대시보드 완성 (캔들차트, 토론 뷰어 등)
 - [ ] **Phase 6:** 30일 페이퍼 트레이딩 운용
 - [ ] **Phase 7:** 실거래 준비 및 보안 감사
@@ -76,6 +76,7 @@
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | Strategy B Consensus MVP 구현 — proposer/challenger/synthesizer 흐름, debate_transcripts 저장, B 예측 기록, Orchestrator --consensus 연동 | ✅ 완료 |
 | 2026-03-12 | Strategy A 토너먼트 기본 구현 — 5개 Predictor 병렬 실행, 예측 정답 백필, 롤링 정확도 기반 우승자 선정, Orchestrator 연동(--tournament) | ✅ 완료 |
 | 2026-03-12 | CollectorAgent KIS WebSocket 본연동 — approval_key 발급, TR 구독, 틱 파싱/저장, 재연결/폴백 로직 추가 | ✅ 완료 |
 | 2026-03-12 | Phase 2 코어 에이전트 MVP 추가 — collector/predictor/portfolio_manager/notifier/orchestrator, db models/queries, llm clients(claude/gpt/gemini) 구현 | ✅ 완료 |
@@ -93,7 +94,7 @@
 Phase 1 인프라 구축    ██████████  100% ✅ (문서 + 코드 완료)
 Phase 2 코어 에이전트  ██████████  100% ✅
 Phase 3 Strategy A    ████░░░░░░   40% (토너먼트 기본 구현 완료)
-Phase 4 Strategy B    ░░░░░░░░░░    0%
+Phase 4 Strategy B    ███░░░░░░░   30% (합의 러너 기본 구현 완료)
 Phase 5 대시보드       ██░░░░░░░░   20% (스캐폴딩 완료, 상세 구현 미완)
 Phase 6 페이퍼 운용    ░░░░░░░░░░    0%
 Phase 7 실거래 준비    ░░░░░░░░░░    0%

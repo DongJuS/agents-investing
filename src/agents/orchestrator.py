@@ -24,6 +24,7 @@ from src.agents.collector import CollectorAgent
 from src.agents.notifier import NotifierAgent
 from src.agents.portfolio_manager import PortfolioManagerAgent
 from src.agents.predictor import PredictorAgent
+from src.agents.strategy_b_consensus import StrategyBConsensus
 from src.agents.strategy_a_tournament import StrategyATournament
 from src.db.models import AgentHeartbeatRecord
 from src.db.queries import insert_heartbeat
@@ -36,14 +37,21 @@ logger = get_logger(__name__)
 
 
 class OrchestratorAgent:
-    def __init__(self, agent_id: str = "orchestrator_agent", use_tournament: bool = False) -> None:
+    def __init__(
+        self,
+        agent_id: str = "orchestrator_agent",
+        use_tournament: bool = False,
+        use_consensus: bool = False,
+    ) -> None:
         self.agent_id = agent_id
         self.collector = CollectorAgent()
         self.predictor = PredictorAgent()
         self.tournament = StrategyATournament()
+        self.consensus = StrategyBConsensus()
         self.portfolio = PortfolioManagerAgent()
         self.notifier = NotifierAgent()
         self.use_tournament = use_tournament
+        self.use_consensus = use_consensus
 
     async def _load_winner_predictions(self, winner_agent_id: str, tickers: list[str]) -> list:
         from src.db.models import PredictionSignal
@@ -86,7 +94,9 @@ class OrchestratorAgent:
             cycle_tickers = [p.ticker for p in collected_points] or (tickers or [])
 
             winner = None
-            if self.use_tournament:
+            if self.use_consensus:
+                predictions = await self.consensus.run(cycle_tickers)
+            elif self.use_tournament:
                 tournament_result = await self.tournament.run_daily_tournament(cycle_tickers)
                 winner = tournament_result["winner_agent_id"]
                 predictions = await self._load_winner_predictions(winner, cycle_tickers)
@@ -105,7 +115,11 @@ class OrchestratorAgent:
                 "predicted": len(predictions),
                 "orders": len(orders),
                 "winner_agent_id": winner,
-                "mode": "tournament" if self.use_tournament else "single_predictor",
+                "mode": (
+                    "consensus"
+                    if self.use_consensus
+                    else ("tournament" if self.use_tournament else "single_predictor")
+                ),
                 "started_at": started.isoformat() + "Z",
                 "finished_at": datetime.utcnow().isoformat() + "Z",
             }
@@ -152,7 +166,7 @@ class OrchestratorAgent:
 
 
 async def _main_async(args: argparse.Namespace) -> None:
-    agent = OrchestratorAgent(use_tournament=args.tournament)
+    agent = OrchestratorAgent(use_tournament=args.tournament, use_consensus=args.consensus)
     tickers = args.tickers.split(",") if args.tickers else None
     if args.loop:
         await agent.run_loop(interval_seconds=args.interval_seconds, tickers=tickers)
@@ -165,6 +179,7 @@ def main() -> None:
     parser.add_argument("--tickers", default="", help="쉼표 구분 티커 목록")
     parser.add_argument("--loop", action="store_true", help="주기 실행 모드")
     parser.add_argument("--tournament", action="store_true", help="Strategy A 5개 인스턴스 토너먼트 모드")
+    parser.add_argument("--consensus", action="store_true", help="Strategy B 합의/토론 모드")
     parser.add_argument("--interval-seconds", type=int, default=600, help="주기 실행 간격(초)")
     args = parser.parse_args()
     asyncio.run(_main_async(args))

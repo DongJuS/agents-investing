@@ -138,6 +138,51 @@ async def insert_prediction(signal: PredictionSignal) -> int:
     return int(prediction_id)
 
 
+async def insert_debate_transcript(
+    trading_date: date,
+    ticker: str,
+    rounds: int,
+    consensus_reached: bool,
+    final_signal: Optional[str],
+    confidence: Optional[float],
+    proposer_content: str,
+    challenger1_content: str,
+    challenger2_content: str,
+    synthesizer_content: str,
+    no_consensus_reason: Optional[str] = None,
+    duration_seconds: Optional[int] = None,
+) -> int:
+    transcript_id = await fetchval(
+        """
+        INSERT INTO debate_transcripts (
+            trading_date, ticker, rounds, consensus_reached,
+            final_signal, confidence,
+            proposer_content, challenger1_content, challenger2_content, synthesizer_content,
+            no_consensus_reason, duration_seconds
+        ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6,
+            $7, $8, $9, $10,
+            $11, $12
+        )
+        RETURNING id
+        """,
+        trading_date,
+        ticker,
+        rounds,
+        consensus_reached,
+        final_signal,
+        confidence,
+        proposer_content,
+        challenger1_content,
+        challenger2_content,
+        synthesizer_content,
+        no_consensus_reason,
+        duration_seconds,
+    )
+    return int(transcript_id)
+
+
 async def get_position(ticker: str) -> Optional[dict]:
     row = await fetchrow(
         """
