@@ -225,6 +225,7 @@ python scripts/smoke_test.py
 
 ```
 [ ] 최소 30일 페이퍼 트레이딩 성과 기록 보유
+[ ] `scripts/run_phase6_paper_validation.py --days 30` 최근 통과 이력 보유
 [ ] 서킷브레이커 동작 테스트 완료
 [ ] 최대 포지션 비중 제한 동작 확인
 [ ] `scripts/validate_risk_rules.py` 최근 통과 이력 보유
@@ -235,6 +236,7 @@ python scripts/smoke_test.py
 
 전환 시 `.env`에서 `KIS_IS_PAPER_TRADING=false`로 변경 후 재시작합니다.
 권장: 전환 직전 `python scripts/preflight_real_trading.py`를 실행해 운영 감사 + readiness를 동시에 확인합니다.
+전체 완료 검증은 `python scripts/validate_all_phases.py`를 사용합니다.
 
 ---
 
@@ -251,6 +253,8 @@ python scripts/smoke_test.py
 | `scripts/preflight_real_trading.py` | 실거래 전환 readiness 사전 점검 |
 | `scripts/security_audit.py` | 저장소 시크릿/`.env` 추적 보안 감사 |
 | `scripts/validate_risk_rules.py` | 리스크 규칙(서킷브레이커/포지션 한도) 자동 검증 |
+| `scripts/run_phase6_paper_validation.py` | 30일 페이퍼/고변동성/부하 자동 검증 및 기록 |
+| `scripts/validate_all_phases.py` | Phase 1~7 완료율 자동 검증 |
 | `scripts/test_llm_connections.py` | LLM API 연결 테스트 |
 | `scripts/smoke_test.py` | 전체 플로우 스모크 테스트 |
 

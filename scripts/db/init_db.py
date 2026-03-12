@@ -281,10 +281,35 @@ CREATE_TABLES: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_operational_audits_type_ts
         ON operational_audits (audit_type, created_at DESC);
     """,
+
+    # 14. 페이퍼 트레이딩 장기 검증 이력
+    """
+    CREATE TABLE IF NOT EXISTS paper_trading_runs (
+        id                      BIGSERIAL PRIMARY KEY,
+        scenario                VARCHAR(30) NOT NULL, -- baseline, high_volatility, load
+        simulated_days          INTEGER NOT NULL,
+        start_date              DATE NOT NULL,
+        end_date                DATE NOT NULL,
+        trade_count             INTEGER NOT NULL DEFAULT 0,
+        return_pct              NUMERIC(7, 3) NOT NULL DEFAULT 0,
+        benchmark_return_pct    NUMERIC(7, 3),
+        max_drawdown_pct        NUMERIC(7, 3),
+        sharpe_ratio            NUMERIC(10, 4),
+        passed                  BOOLEAN NOT NULL DEFAULT FALSE,
+        summary                 TEXT NOT NULL,
+        report                  JSONB,
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_paper_trading_runs_ts
+        ON paper_trading_runs (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_paper_trading_runs_scenario
+        ON paper_trading_runs (scenario, created_at DESC);
+    """,
 ]
 
 DROP_TABLES_SQL = """
 DROP TABLE IF EXISTS
+    paper_trading_runs,
     operational_audits,
     real_trading_audit,
     notification_history,

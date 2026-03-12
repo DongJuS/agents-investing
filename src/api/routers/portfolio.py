@@ -50,6 +50,19 @@ class PerformanceResponse(BaseModel):
     kospi_benchmark_pct: Optional[float] = None
 
 
+class PerformanceSeriesItem(BaseModel):
+    date: str
+    portfolio_return_pct: float
+    benchmark_return_pct: Optional[float] = None
+    realized_pnl_cum: int
+    trade_count: int
+
+
+class PerformanceSeriesResponse(BaseModel):
+    period: str
+    points: list[PerformanceSeriesItem]
+
+
 class PortfolioConfigRequest(BaseModel):
     strategy_blend_ratio: float = Field(ge=0.0, le=1.0)
     max_position_pct: int = Field(ge=1, le=100)
@@ -217,6 +230,26 @@ async def get_performance(
         days,
     )
     metrics = compute_trade_performance([dict(r) for r in rows])
+    benchmark_rows = await fetch(
+        """
+        SELECT
+            (timestamp_kst AT TIME ZONE 'Asia/Seoul')::date AS trade_date,
+            AVG(close)::float AS avg_close
+        FROM market_data
+        WHERE interval = 'daily'
+          AND market = 'KOSPI'
+          AND timestamp_kst >= NOW() - ($1 * INTERVAL '1 day')
+        GROUP BY (timestamp_kst AT TIME ZONE 'Asia/Seoul')::date
+        ORDER BY trade_date
+        """,
+        days,
+    )
+    benchmark_pct = None
+    if benchmark_rows:
+        first_close = float(benchmark_rows[0]["avg_close"])
+        last_close = float(benchmark_rows[-1]["avg_close"])
+        if first_close > 0:
+            benchmark_pct = round(((last_close / first_close) - 1.0) * 100, 2)
 
     return PerformanceResponse(
         period=period,
@@ -225,8 +258,85 @@ async def get_performance(
         sharpe_ratio=metrics["sharpe_ratio"],
         win_rate=metrics["win_rate"],
         total_trades=metrics["total_trades"],
-        kospi_benchmark_pct=None,
+        kospi_benchmark_pct=benchmark_pct,
     )
+
+
+@router.get("/performance-series", response_model=PerformanceSeriesResponse)
+async def get_performance_series(
+    _: Annotated[dict, Depends(get_current_user)],
+    period: str = Query(
+        default="monthly", pattern="^(daily|weekly|monthly|all)$"
+    ),
+) -> PerformanceSeriesResponse:
+    """일자별 누적 성과 시계열(포트폴리오 vs KOSPI 대용 벤치마크)을 반환합니다."""
+    from src.utils.performance import compute_benchmark_series, compute_trade_performance_series
+
+    period_days_map = {"daily": 1, "weekly": 7, "monthly": 30, "all": 99999}
+    days = period_days_map[period]
+
+    trade_rows = await fetch(
+        """
+        SELECT ticker, side, price, quantity, amount, executed_at
+        FROM trade_history
+        WHERE is_paper = TRUE
+          AND executed_at >= NOW() - ($1 * INTERVAL '1 day')
+        ORDER BY executed_at
+        """,
+        days,
+    )
+    benchmark_rows = await fetch(
+        """
+        SELECT
+            (timestamp_kst AT TIME ZONE 'Asia/Seoul')::date AS trade_date,
+            AVG(close)::float AS avg_close
+        FROM market_data
+        WHERE interval = 'daily'
+          AND market = 'KOSPI'
+          AND timestamp_kst >= NOW() - ($1 * INTERVAL '1 day')
+        GROUP BY (timestamp_kst AT TIME ZONE 'Asia/Seoul')::date
+        ORDER BY trade_date
+        """,
+        days,
+    )
+
+    portfolio_series = compute_trade_performance_series([dict(r) for r in trade_rows])
+    benchmark_series = compute_benchmark_series([dict(r) for r in benchmark_rows])
+    benchmark_by_date = {row["date"]: row["benchmark_return_pct"] for row in benchmark_series}
+
+    points = [
+        PerformanceSeriesItem(
+            date=item["date"],
+            portfolio_return_pct=item["portfolio_return_pct"],
+            benchmark_return_pct=benchmark_by_date.get(item["date"]),
+            realized_pnl_cum=item["realized_pnl_cum"],
+            trade_count=item["trade_count"],
+        )
+        for item in portfolio_series
+    ]
+    return PerformanceSeriesResponse(period=period, points=points)
+
+
+@router.get("/config")
+async def get_config(
+    _: Annotated[dict, Depends(get_admin_user)],
+) -> dict:
+    """현재 포트폴리오 운영 설정을 조회합니다."""
+    row = await fetchrow(
+        """
+        SELECT strategy_blend_ratio, max_position_pct, daily_loss_limit_pct, is_paper_trading
+        FROM portfolio_config
+        LIMIT 1
+        """
+    )
+    if not row:
+        return {
+            "strategy_blend_ratio": 0.5,
+            "max_position_pct": 20,
+            "daily_loss_limit_pct": 3,
+            "is_paper_trading": True,
+        }
+    return dict(row)
 
 
 @router.post("/config")

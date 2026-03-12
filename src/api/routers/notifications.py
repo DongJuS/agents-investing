@@ -26,6 +26,15 @@ class NotificationPreferencesRequest(BaseModel):
     weekly_summary: bool = True
 
 
+DEFAULT_NOTIFICATION_PREFERENCES = {
+    "morning_brief": True,
+    "trade_alerts": True,
+    "circuit_breaker": True,
+    "daily_report": True,
+    "weekly_summary": True,
+}
+
+
 @router.get("/history")
 async def get_notification_history(
     _: Annotated[dict, Depends(get_current_user)],
@@ -43,6 +52,28 @@ async def get_notification_history(
         limit,
     )
     return {"notifications": [dict(r) for r in rows]}
+
+
+@router.get("/preferences")
+async def get_preferences(
+    _: Annotated[dict, Depends(get_current_user)],
+) -> dict:
+    """현재 알림 설정을 조회합니다."""
+    import json
+    from src.utils.redis_client import get_redis
+
+    redis = await get_redis()
+    raw = await redis.get("system:notification_preferences")
+    if not raw:
+        return {"preferences": DEFAULT_NOTIFICATION_PREFERENCES}
+
+    try:
+        loaded = json.loads(raw)
+    except Exception:
+        loaded = {}
+
+    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **loaded}
+    return {"preferences": merged}
 
 
 @router.post("/test")
@@ -109,8 +140,9 @@ async def update_preferences(
     from src.utils.redis_client import get_redis
 
     redis = await get_redis()
+    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **body.model_dump()}
     await redis.set(
         "system:notification_preferences",
-        json.dumps(body.model_dump()),
+        json.dumps(merged),
     )
-    return {"message": "알림 설정이 업데이트되었습니다.", "preferences": body.model_dump()}
+    return {"message": "알림 설정이 업데이트되었습니다.", "preferences": merged}

@@ -47,6 +47,10 @@ class RealTradingReadinessTest(unittest.IsolatedAsyncioTestCase):
                     ]
                 ),
             ),
+            patch(
+                "src.utils.readiness.fetch_latest_paper_trading_run",
+                new=AsyncMock(return_value={"simulated_days": 30, "passed": True}),
+            ),
         ):
             result = await evaluate_real_trading_readiness()
 
@@ -93,6 +97,10 @@ class RealTradingReadinessTest(unittest.IsolatedAsyncioTestCase):
                         None,
                     ]
                 ),
+            ),
+            patch(
+                "src.utils.readiness.fetch_latest_paper_trading_run",
+                new=AsyncMock(return_value={"simulated_days": 5, "passed": False}),
             ),
         ):
             result = await evaluate_real_trading_readiness()

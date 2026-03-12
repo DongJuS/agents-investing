@@ -276,6 +276,37 @@
   }
   ```
 
+### GET `/portfolio/performance-series`
+- **설명:** 일자별 누적 성과 시계열 (Portfolio vs KOSPI Proxy)
+- **Query Params:** `period=daily|weekly|monthly|all`
+- **Response (200):**
+  ```json
+  {
+    "period": "monthly",
+    "points": [
+      {
+        "date": "2026-03-01",
+        "portfolio_return_pct": 1.2,
+        "benchmark_return_pct": 0.8,
+        "realized_pnl_cum": 120000,
+        "trade_count": 3
+      }
+    ]
+  }
+  ```
+
+### GET `/portfolio/config`
+- **설명:** 현재 전략/리스크/모드 설정 조회 (관리자 전용)
+- **Response (200):**
+  ```json
+  {
+    "strategy_blend_ratio": 0.5,
+    "max_position_pct": 20,
+    "daily_loss_limit_pct": 3,
+    "is_paper_trading": true
+  }
+  ```
+
 ### GET `/portfolio/readiness`
 - **설명:** 실거래 전환 readiness 점검 결과 조회 (관리자 전용)
 - **주요 체크 항목:** 자격증명, DB/Redis, 리스크 한도, 페이퍼 운용 일수, 운영 감사(`security`, `risk_rules`) 최신 통과 여부
@@ -346,6 +377,9 @@
 ### GET `/notifications/history`
 - **설명:** 최근 Telegram 발송 이력 조회
 - **Query Params:** `limit=20`
+
+### GET `/notifications/preferences`
+- **설명:** 현재 알림 설정 조회
 
 ### POST `/notifications/test`
 - **설명:** 테스트 Telegram 알림 발송

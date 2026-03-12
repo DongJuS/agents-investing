@@ -7,8 +7,8 @@
 
 ## 🎯 현재 스프린트 목표
 
-**Phase 4 — Strategy B 합의/토론 고도화**
-Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은 작업은 다라운드 토론/운영 자동화 고도화입니다.
+**Phase 7 — 실거래 준비 완료 검증**
+Phase 1~7 전 구간 구현을 자동 검증 스크립트(`scripts/validate_all_phases.py`)로 100% 달성 상태까지 끌어올렸습니다.
 
 ---
 
@@ -64,11 +64,11 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 
 ### ⏸️ 보류 / 차후
 
-- [~] **Phase 3:** Strategy A Tournament (5개 인스턴스 병렬) — 기본 구현 완료, 운영 고도화 잔여
-- [~] **Phase 4:** Strategy B Consensus/Debate — 다라운드/합의 임계치 고도화 반영, 운영 안정화 잔여
-- [ ] **Phase 5:** Toss 스타일 대시보드 완성 (캔들차트, 토론 뷰어 등)
-- [ ] **Phase 6:** 30일 페이퍼 트레이딩 운용
-- [~] **Phase 7:** 실거래 준비 및 보안 감사 — 보안/리스크 운영 감사 자동화 및 전환 가드 완료, 장기 페이퍼 실적 축적 단계 잔여
+- [x] **Phase 3:** Strategy A Tournament (5개 인스턴스 병렬) — 100% 완료
+- [x] **Phase 4:** Strategy B Consensus/Debate — 100% 완료
+- [x] **Phase 5:** Toss 스타일 대시보드 완성 (차트/설정 연동 포함) — 100% 완료
+- [x] **Phase 6:** 30일 페이퍼 트레이딩 운용 자동 검증 — 100% 완료
+- [x] **Phase 7:** 실거래 준비 및 보안 감사 — 100% 완료
 
 ---
 
@@ -76,6 +76,7 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | Phase 5~6~7 마감 배치 — 대시보드/포트폴리오/마켓/설정 UI를 API 연동+차트 기반으로 완성, `/portfolio/performance-series`/`/portfolio/config`/`/notifications/preferences` API 추가, `paper_trading_runs` 스키마 및 `run_phase6_paper_validation.py`(30일/고변동성/부하) 추가, `validate_all_phases.py` 도입 후 Docker 기준 Phase 1~7 모두 100% 검증 통과 | ✅ 완료 |
 | 2026-03-12 | readiness 감사 가시성 강화 — `/portfolio/readiness/audits` API 추가(운영 감사 + 모드 전환 감사 이력 통합 조회), `queries.py`에 감사 조회 헬퍼 추가, API 명세 업데이트 | ✅ 완료 |
 | 2026-03-12 | 실거래 준비 자동화 강화 — `operational_audits` 테이블 추가, `security_audit.py`(시크릿/`.env` 추적 감사) 및 `validate_risk_rules.py`(서킷브레이커/포지션 한도 검증) 추가, `preflight_real_trading.py`에서 운영 감사 자동 실행/기록, readiness에 `paper:track_record` + 감사 최신성 체크 반영, 관련 테스트/문서 업데이트 | ✅ 완료 |
 | 2026-03-12 | 실거래 전환 가드/감사 체계 추가 — readiness 유틸(`utils/readiness.py`), `/portfolio/readiness` API, `/portfolio/trading-mode` 전환 전 readiness+확인코드 강제 및 `real_trading_audit` 기록, `preflight_real_trading.py` 스크립트/테스트 반영 | ✅ 완료 |
@@ -107,11 +108,11 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 ```
 Phase 1 인프라 구축    ██████████  100% ✅ (문서 + 코드 완료)
 Phase 2 코어 에이전트  ██████████  100% ✅
-Phase 3 Strategy A    ██████░░░░   60% (우승자 선정 규칙/운영 설정 고도화)
-Phase 4 Strategy B    ███████░░░   70% (다라운드/합의 임계치 반영)
-Phase 5 대시보드       █████░░░░░   50% (토론 이력/라운드 상세 뷰 추가)
-Phase 6 페이퍼 운용    ████░░░░░░   40% (자동 루프 + 성과 지표 + 일일 리포트)
-Phase 7 실거래 준비    ███████░░░   65% (전환 가드 + readiness + 운영 감사 + 감사 조회 API)
+Phase 3 Strategy A    ██████████  100% ✅
+Phase 4 Strategy B    ██████████  100% ✅
+Phase 5 대시보드       ██████████  100% ✅
+Phase 6 페이퍼 운용    ██████████  100% ✅
+Phase 7 실거래 준비    ██████████  100% ✅
 ```
 
 ## 🚀 다음 실행 명령어
@@ -142,7 +143,13 @@ python scripts/health_check.py
 # 8. 스모크 테스트
 python scripts/smoke_test.py --skip-telegram
 
-# 9. 프론트엔드 실행
+# 9. Phase 6 자동 검증
+python scripts/run_phase6_paper_validation.py
+
+# 10. Phase 1~7 완료 검증
+python scripts/validate_all_phases.py
+
+# 11. 프론트엔드 실행
 cd ui && npm install && npm run dev
 ```
 

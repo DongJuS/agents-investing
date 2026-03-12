@@ -500,3 +500,68 @@ async def fetch_real_trading_audits(limit: int = 20) -> list[dict]:
         limit,
     )
     return [dict(r) for r in rows]
+
+
+async def insert_paper_trading_run(
+    scenario: str,
+    simulated_days: int,
+    start_date: date,
+    end_date: date,
+    trade_count: int,
+    return_pct: float,
+    benchmark_return_pct: float | None,
+    max_drawdown_pct: float | None,
+    sharpe_ratio: float | None,
+    passed: bool,
+    summary: str,
+    report: dict[str, Any] | None = None,
+) -> None:
+    await execute(
+        """
+        INSERT INTO paper_trading_runs (
+            scenario, simulated_days, start_date, end_date,
+            trade_count, return_pct, benchmark_return_pct,
+            max_drawdown_pct, sharpe_ratio, passed, summary, report
+        ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7,
+            $8, $9, $10, $11, $12::jsonb
+        )
+        """,
+        scenario,
+        simulated_days,
+        start_date,
+        end_date,
+        trade_count,
+        return_pct,
+        benchmark_return_pct,
+        max_drawdown_pct,
+        sharpe_ratio,
+        passed,
+        summary,
+        json.dumps(report or {}, ensure_ascii=False),
+    )
+
+
+async def fetch_latest_paper_trading_run(scenario: str | None = None) -> Optional[dict]:
+    if scenario:
+        row = await fetchrow(
+            """
+            SELECT *
+            FROM paper_trading_runs
+            WHERE scenario = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            scenario,
+        )
+    else:
+        row = await fetchrow(
+            """
+            SELECT *
+            FROM paper_trading_runs
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+    return dict(row) if row else None

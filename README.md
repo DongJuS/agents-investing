@@ -153,6 +153,12 @@ docker compose run --rm api python scripts/preflight_real_trading.py
 # 운영 감사만 개별 실행
 docker compose run --rm api python scripts/security_audit.py
 docker compose run --rm api python scripts/validate_risk_rules.py
+
+# Phase 6(30일 페이퍼/고변동성/부하) 자동 검증
+docker compose run --rm api python scripts/run_phase6_paper_validation.py --days 30
+
+# Phase 1~7 완료율 자동 검증
+docker compose run --rm api python scripts/validate_all_phases.py
 ```
 
 ## ✅ 테스트 실행
@@ -172,8 +178,10 @@ docker compose up -d --build postgres redis api worker ui
 docker compose run --rm api python scripts/db/init_db.py
 docker compose run --rm api python scripts/security_audit.py
 docker compose run --rm api python scripts/validate_risk_rules.py
+docker compose run --rm api python scripts/run_phase6_paper_validation.py --days 30
 docker compose exec -T api python scripts/smoke_test.py --skip-telegram
 docker compose run --rm api python scripts/preflight_real_trading.py
+docker compose run --rm api python scripts/validate_all_phases.py
 docker compose run --rm api python -m unittest discover -s test -p 'test_*.py' -v
 docker compose run --rm ui npm run build
 ```

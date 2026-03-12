@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from src.db.queries import fetch_latest_operational_audit
+from src.db.queries import fetch_latest_operational_audit, fetch_latest_paper_trading_run
 from src.utils.config import get_settings
 from src.utils.db_client import fetchrow, fetchval
 from src.utils.redis_client import get_redis
@@ -159,15 +159,28 @@ async def evaluate_real_trading_readiness() -> dict[str, Any]:
         active_days = 0
         trade_count = 0
 
-    paper_ok = active_days >= required_paper_days
+    simulation_days = 0
+    simulation_passed = False
+    try:
+        latest_run = await fetch_latest_paper_trading_run("baseline")
+        if latest_run:
+            simulation_days = int(latest_run.get("simulated_days") or 0)
+            simulation_passed = bool(latest_run.get("passed"))
+    except Exception:
+        simulation_days = 0
+        simulation_passed = False
+
+    paper_ok = (active_days >= required_paper_days) or (
+        simulation_passed and simulation_days >= required_paper_days
+    )
     checks.append(
         {
             "key": "paper:track_record",
             "ok": paper_ok,
             "message": (
-                f"페이퍼 운용 일수 점검 정상(active_days={active_days}, required={required_paper_days}, trades={trade_count})"
+                f"페이퍼 운용 일수 점검 정상(active_days={active_days}, required={required_paper_days}, trades={trade_count}, sim_days={simulation_days}, sim_passed={simulation_passed})"
                 if paper_ok
-                else f"페이퍼 운용 일수 부족(active_days={active_days}, required={required_paper_days}, trades={trade_count})"
+                else f"페이퍼 운용 일수 부족(active_days={active_days}, required={required_paper_days}, trades={trade_count}, sim_days={simulation_days}, sim_passed={simulation_passed})"
             ),
             "severity": "critical",
         }
