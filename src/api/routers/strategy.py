@@ -63,6 +63,22 @@ class DebateResponse(BaseModel):
     created_at: str
 
 
+class DebateListItem(BaseModel):
+    id: int
+    date: str
+    ticker: str
+    rounds: int
+    consensus_reached: bool
+    final_signal: Optional[str] = None
+    confidence: Optional[float] = None
+    no_consensus_reason: Optional[str] = None
+    created_at: str
+
+
+class DebateListResponse(BaseModel):
+    items: list[DebateListItem]
+
+
 class CombinedSignalItem(BaseModel):
     ticker: str
     strategy_a_signal: Optional[str] = None
@@ -207,6 +223,40 @@ async def get_debate_transcript(
         )
 
     return DebateResponse(**dict(row))
+
+
+@router.get("/b/debates", response_model=DebateListResponse)
+async def list_debate_transcripts(
+    _: Annotated[dict, Depends(get_current_user)],
+    limit: int = Query(default=20, ge=1, le=100),
+    ticker: Optional[str] = Query(default=None, description="티커 코드 (예: 005930)"),
+    date: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+) -> DebateListResponse:
+    """Strategy B 최근 토론 이력을 조회합니다."""
+    rows = await fetch(
+        """
+        SELECT
+            id,
+            trading_date::text AS date,
+            ticker,
+            rounds,
+            consensus_reached,
+            final_signal,
+            confidence::float AS confidence,
+            no_consensus_reason,
+            to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS+09:00') AS created_at
+        FROM debate_transcripts
+        WHERE ($1::text IS NULL OR ticker = $1)
+          AND ($2::date IS NULL OR trading_date = $2::date)
+        ORDER BY trading_date DESC, created_at DESC
+        LIMIT $3
+        """,
+        ticker,
+        date,
+        limit,
+    )
+
+    return DebateListResponse(items=[DebateListItem(**dict(r)) for r in rows])
 
 
 @router.get("/combined", response_model=CombinedResponse)

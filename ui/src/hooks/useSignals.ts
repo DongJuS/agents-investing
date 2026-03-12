@@ -50,6 +50,18 @@ export interface DebateTranscript {
   created_at: string;
 }
 
+export interface DebateListItem {
+  id: number;
+  date: string;
+  ticker: string;
+  rounds: number;
+  consensus_reached: boolean;
+  final_signal: string | null;
+  confidence: number | null;
+  no_consensus_reason: string | null;
+  created_at: string;
+}
+
 async function fetchCombinedSignals(): Promise<{
   blend_ratio: number;
   signals: CombinedSignal[];
@@ -76,6 +88,11 @@ async function fetchStrategyBSignals(): Promise<{
 
 async function fetchDebateTranscript(debateId: number): Promise<DebateTranscript> {
   const { data } = await api.get(`/strategy/b/debate/${debateId}`);
+  return data;
+}
+
+async function fetchDebateList(limit = 30): Promise<{ items: DebateListItem[] }> {
+  const { data } = await api.get("/strategy/b/debates", { params: { limit } });
   return data;
 }
 
@@ -108,5 +125,13 @@ export function useDebateTranscript(debateId: number | null) {
     queryKey: ["strategy", "debate", debateId],
     queryFn: () => fetchDebateTranscript(debateId as number),
     enabled: debateId !== null,
+  });
+}
+
+export function useDebateList(limit = 30) {
+  return useQuery({
+    queryKey: ["strategy", "debates", limit],
+    queryFn: () => fetchDebateList(limit),
+    refetchInterval: 60_000,
   });
 }
