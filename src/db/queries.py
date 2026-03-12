@@ -277,6 +277,36 @@ async def today_trade_totals() -> dict:
     }
 
 
+async def fetch_trade_rows(days: int, is_paper: bool = True) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT ticker, side, price, quantity, amount, executed_at
+        FROM trade_history
+        WHERE is_paper = $1
+          AND executed_at >= NOW() - ($2 * INTERVAL '1 day')
+        ORDER BY executed_at
+        """,
+        is_paper,
+        days,
+    )
+    return [dict(r) for r in rows]
+
+
+async def fetch_trade_rows_for_date(trade_date: date, is_paper: bool = True) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT ticker, side, price, quantity, amount, executed_at
+        FROM trade_history
+        WHERE is_paper = $1
+          AND executed_at::date = $2::date
+        ORDER BY executed_at
+        """,
+        is_paper,
+        trade_date,
+    )
+    return [dict(r) for r in rows]
+
+
 async def insert_trade(order: PaperOrderRequest, circuit_breaker: bool = False) -> None:
     await execute(
         """

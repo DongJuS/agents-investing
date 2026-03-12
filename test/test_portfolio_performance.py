@@ -1,6 +1,6 @@
 import unittest
 
-from src.api.routers.portfolio import _compute_trade_performance
+from src.utils.performance import compute_trade_performance
 
 
 class PortfolioPerformanceMetricsTest(unittest.TestCase):
@@ -11,7 +11,7 @@ class PortfolioPerformanceMetricsTest(unittest.TestCase):
             {"ticker": "BBB", "side": "BUY", "quantity": 1, "price": 200, "amount": 200},
             {"ticker": "BBB", "side": "SELL", "quantity": 1, "price": 180, "amount": 180},
         ]
-        result = _compute_trade_performance(rows)
+        result = compute_trade_performance(rows)
 
         self.assertEqual(result["total_trades"], 4)
         self.assertEqual(result["return_pct"], -3.33)
@@ -23,7 +23,7 @@ class PortfolioPerformanceMetricsTest(unittest.TestCase):
         rows = [
             {"ticker": "AAA", "side": "BUY", "quantity": 2, "price": 100, "amount": 200},
         ]
-        result = _compute_trade_performance(rows)
+        result = compute_trade_performance(rows)
 
         self.assertEqual(result["total_trades"], 1)
         self.assertEqual(result["return_pct"], 0.0)

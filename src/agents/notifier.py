@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 import json
 import sys
 from pathlib import Path
@@ -19,9 +19,15 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from src.db.models import AgentHeartbeatRecord, NotificationRecord
-from src.db.queries import insert_heartbeat, insert_notification
+from src.db.queries import (
+    fetch_trade_rows,
+    fetch_trade_rows_for_date,
+    insert_heartbeat,
+    insert_notification,
+)
 from src.utils.config import get_settings
 from src.utils.logging import get_logger, setup_logging
+from src.utils.performance import compute_trade_performance
 from src.utils.redis_client import TOPIC_ALERTS, set_heartbeat, get_redis
 
 setup_logging()
@@ -85,6 +91,26 @@ class NotifierAgent:
             f"- 시각(UTC): {datetime.utcnow().isoformat()}Z"
         )
         return await self.send(event_type="cycle_summary", message=text)
+
+    async def send_paper_daily_report(self, report_date: date | None = None) -> bool:
+        target_date = report_date or date.today()
+        rows_today = await fetch_trade_rows_for_date(target_date, is_paper=True)
+        rows_30d = await fetch_trade_rows(days=30, is_paper=True)
+        metrics_today = compute_trade_performance(rows_today)
+        metrics_30d = compute_trade_performance(rows_30d)
+
+        text = (
+            f"🧾 Alpha 페이퍼 일일 리포트 ({target_date.isoformat()})\n"
+            f"- 오늘 거래: {metrics_today['total_trades']}건 (SELL {metrics_today['sell_count']}건)\n"
+            f"- 오늘 실현손익: {metrics_today['realized_pnl']:,}원\n"
+            f"- 오늘 수익률: {metrics_today['return_pct']:.2f}%\n"
+            f"- 30일 실현손익: {metrics_30d['realized_pnl']:,}원\n"
+            f"- 30일 수익률: {metrics_30d['return_pct']:.2f}%\n"
+            f"- 30일 승률: {metrics_30d['win_rate']:.2f}\n"
+            f"- 30일 MDD: {metrics_30d['max_drawdown_pct']:.2f}%\n"
+            f"- 30일 Sharpe: {metrics_30d['sharpe_ratio'] if metrics_30d['sharpe_ratio'] is not None else '-'}"
+        )
+        return await self.send(event_type="paper_daily_report", message=text)
 
     async def listen_alerts(self) -> None:
         """Redis alerts 채널을 구독해 Telegram으로 릴레이합니다."""

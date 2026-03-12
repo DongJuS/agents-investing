@@ -139,6 +139,12 @@ python -m src.agents.orchestrator --blend --tickers 005930,000660
 # Docker worker 단독 실행/재시작
 docker compose up -d worker
 docker compose restart worker
+
+# 일일 페이퍼 리포트 자동 발송(예: 17:10 KST)
+# .env:
+# ORCH_ENABLE_DAILY_REPORT=true
+# ORCH_DAILY_REPORT_HOUR=17
+# ORCH_DAILY_REPORT_MINUTE=10
 ```
 
 ## ✅ 테스트 실행
