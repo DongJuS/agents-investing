@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from src.llm.cli_bridge import build_cli_command, is_cli_available, run_cli_prompt
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
 from src.utils.secret_validation import is_placeholder_secret
@@ -19,7 +20,16 @@ class GeminiClient:
         self.model = model
         settings = get_settings()
         self.api_key = settings.gemini_api_key
+        self.cli_timeout_seconds = settings.llm_cli_timeout_seconds
+        self._cli_command = build_cli_command(settings.gemini_cli_command, model=self.model)
         self._model: Optional[Any] = None
+
+        if self._cli_command:
+            if is_cli_available(self._cli_command):
+                logger.info("Gemini CLI 모드 활성화: %s", self._cli_command[0])
+                return
+            logger.warning("Gemini CLI 명령을 찾을 수 없어 SDK 모드로 폴백: %s", self._cli_command[0])
+            self._cli_command = []
 
         if is_placeholder_secret(self.api_key):
             return
@@ -35,9 +45,15 @@ class GeminiClient:
 
     @property
     def is_configured(self) -> bool:
-        return self._model is not None
+        return bool(self._cli_command) or self._model is not None
 
     async def ask(self, prompt: str) -> str:
+        if self._cli_command:
+            return await run_cli_prompt(
+                command=self._cli_command,
+                prompt=prompt,
+                timeout_seconds=self.cli_timeout_seconds,
+            )
         if not self._model:
             raise RuntimeError("Gemini client is not configured.")
 
