@@ -14,6 +14,8 @@
 | `PortfolioManagerAgent` | 포트폴리오 관리 및 주문 실행 | 이벤트: `signal` | `redis:topic:orders` |
 | `NotifierAgent` | Telegram 알림 발송 | 이벤트: 모든 주요 이벤트 | Telegram Bot |
 | `OrchestratorAgent` | 전체 워크플로우 조율 | 크론 + 이벤트 | 모든 채널 |
+| `FastFlowAgent` | 빠른 전체 흐름 설계 | API 요청: `dual_execution` | API 응답 + heartbeat |
+| `SlowMeticulousAgent` | 꼼꼼한 상세 검증 계획 작성 | API 요청: `dual_execution` | API 응답 + heartbeat |
 
 ---
 
@@ -213,6 +215,25 @@ Strategy A와 Strategy B의 시그널을 받아 KIS API를 통해 실제(또는 
 - 각 에이전트 heartbeat 폴링 간격: 60초
 - 연속 3회 heartbeat 미수신: NotifierAgent 알림 + 프로세스 재시작 시도
 - LangGraph StateGraph + Redis 체크포인팅으로 상태 영속화
+
+---
+
+## 6. FastFlowAgent + SlowMeticulousAgent (듀얼 실행)
+
+### 역할
+- `FastFlowAgent`: 작업의 전체 흐름을 빠르게 파악하고 우선순위를 제시
+- `SlowMeticulousAgent`: 누락 방지를 위해 상세 단계, 검증 게이트, 리스크를 보강
+
+### 실행 순서
+1. `/api/v1/agents/dual-execution/run` 호출
+2. FastFlowAgent 결과 생성 (요약/우선순위/빠른 리스크)
+3. SlowMeticulousAgent 결과 생성 (상세 단계/검증 체크)
+4. 통합 실행 계획 응답 + 두 에이전트 heartbeat 기록
+
+### 운영 원칙
+- 속도와 품질을 분리해 처리: Fast는 방향, Slow는 검증
+- 결과 충돌 시 검증 게이트를 통과하는 보수적 안을 채택
+- 작업 완료 시 변경 의도와 검증 결과가 포함된 상세 커밋 메시지를 남김
 
 ---
 

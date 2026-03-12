@@ -48,7 +48,7 @@
 
 ---
 
-## 🤖 5개 에이전트
+## 🤖 7개 에이전트
 
 | 에이전트 | 역할 |
 |----------|------|
@@ -57,6 +57,8 @@
 | PortfolioManagerAgent | KIS API로 페이퍼/실거래 주문 실행 |
 | NotifierAgent | Telegram Bot 알림 발송 |
 | OrchestratorAgent | LangGraph 기반 전체 워크플로우 조율 |
+| FastFlowAgent | 작업의 전체 흐름/우선순위를 빠르게 설계 |
+| SlowMeticulousAgent | 상세 체크리스트·검증 게이트를 꼼꼼히 보강 |
 
 ---
 

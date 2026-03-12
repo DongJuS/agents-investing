@@ -114,6 +114,56 @@
 ### POST `/agents/{agent_id}/restart`
 - **설명:** 에이전트 재시작 트리거 (관리자 전용)
 
+### POST `/agents/dual-execution/run`
+- **설명:** 2개 실행 에이전트를 자동 순차 실행 (빠른 흐름 + 꼼꼼 검증)
+- **인증:** 필요
+- **Request Body:**
+  ```json
+  {
+    "task": "docker 컨테이너 기반 실행 구성 점검",
+    "context": ["API 라우팅 유지", "문서 동기화"]
+  }
+  ```
+- **Response (200):**
+  ```json
+  {
+    "task": "docker 컨테이너 기반 실행 구성 점검",
+    "generated_at": "2026-03-12T09:00:00+00:00",
+    "fast_flow": {
+      "agent_id": "fast_flow_agent",
+      "mode": "fast-overview",
+      "summary": "작업을 큰 흐름 기준으로 분해...",
+      "priorities": ["1. 컨테이너/배포 먼저 고정"],
+      "execution_tracks": ["현재 상태를 5분 내 스캔..."],
+      "quick_risks": ["환경별 포트/네트워크 차이로 연결 실패 가능성"]
+    },
+    "slow_meticulous": {
+      "agent_id": "slow_meticulous_agent",
+      "mode": "slow-meticulous",
+      "assumptions": ["기존 API 계약과 DB 스키마 호환성 유지"],
+      "detailed_steps": [
+        {
+          "step": "[1] 컨테이너/배포 변경 구현",
+          "why": "컨테이너/배포 영역이 전체 작업 성공률에 직접 영향",
+          "done_criteria": "코드/설정/문서가 서로 모순 없이 반영됨"
+        }
+      ],
+      "validation_checks": ["정적 점검 또는 컴파일 단계에서 문법 오류가 없어야 함"],
+      "blockers_to_watch": ["외부 의존 서비스 미기동 시 검증 결과 왜곡 가능"]
+    },
+    "combined": {
+      "execution_mode": "fast-first-then-meticulous",
+      "immediate_actions": [
+        "fast_flow_agent 계획으로 우선순위 고정",
+        "slow_meticulous_agent 체크리스트로 누락 검증",
+        "검증 통과 후 상세 커밋 메시지로 결과 고정"
+      ],
+      "verification_gate": ["핵심 API 경로 또는 스크립트 실행 결과가 성공이어야 함"],
+      "completion_definition": ["핵심 변경이 실행 가능한 상태로 반영됨"]
+    }
+  }
+  ```
+
 ---
 
 ## 🧠 전략 시그널

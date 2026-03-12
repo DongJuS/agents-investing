@@ -235,6 +235,7 @@ python scripts/smoke_test.py
 | `scripts/kis_auth.py` | KIS OAuth 토큰 관리 |
 | `scripts/fetch_krx_holidays.py` | KRX 휴장일 갱신 |
 | `scripts/health_check.py` | 에이전트 헬스 확인 |
+| `scripts/run_dual_execution.py` | Fast/Slow 2-에이전트 자동 실행 계획 생성 |
 | `scripts/test_llm_connections.py` | LLM API 연결 테스트 |
 | `scripts/smoke_test.py` | 전체 플로우 스모크 테스트 |
 

@@ -5,10 +5,16 @@ src/api/routers/agents.py — 에이전트 상태 및 관리 라우터
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from src.agents import (
+    FAST_FLOW_AGENT_ID,
+    SLOW_METICULOUS_AGENT_ID,
+    DualExecutionCoordinator,
+    record_dual_execution_heartbeat,
+)
 from src.api.deps import get_admin_user, get_current_user
-from src.utils.db_client import fetch, fetchrow
+from src.utils.db_client import fetch
 from src.utils.redis_client import check_heartbeat
 
 router = APIRouter()
@@ -23,6 +29,8 @@ AGENT_IDS = [
     "portfolio_manager_agent",
     "notifier_agent",
     "orchestrator_agent",
+    FAST_FLOW_AGENT_ID,
+    SLOW_METICULOUS_AGENT_ID,
 ]
 
 
@@ -42,6 +50,50 @@ class AgentStatusItem(BaseModel):
 
 class AgentsStatusResponse(BaseModel):
     agents: list[AgentStatusItem]
+
+
+class DualExecutionRequest(BaseModel):
+    task: str = Field(..., min_length=4, description="실행할 작업 지시")
+    context: list[str] = Field(default_factory=list, description="보조 컨텍스트(선택)")
+
+
+class DetailedStepItem(BaseModel):
+    step: str
+    why: str
+    done_criteria: str
+
+
+class FastFlowPlanItem(BaseModel):
+    agent_id: str
+    mode: str
+    summary: str
+    priorities: list[str]
+    execution_tracks: list[str]
+    quick_risks: list[str]
+
+
+class SlowMeticulousPlanItem(BaseModel):
+    agent_id: str
+    mode: str
+    assumptions: list[str]
+    detailed_steps: list[DetailedStepItem]
+    validation_checks: list[str]
+    blockers_to_watch: list[str]
+
+
+class CombinedExecutionPlanItem(BaseModel):
+    execution_mode: str
+    immediate_actions: list[str]
+    verification_gate: list[str]
+    completion_definition: list[str]
+
+
+class DualExecutionResponse(BaseModel):
+    task: str
+    generated_at: str
+    fast_flow: FastFlowPlanItem
+    slow_meticulous: SlowMeticulousPlanItem
+    combined: CombinedExecutionPlanItem
 
 
 @router.get("/status", response_model=AgentsStatusResponse)
@@ -79,6 +131,25 @@ async def get_agents_status(
         )
 
     return AgentsStatusResponse(agents=items)
+
+
+@router.post("/dual-execution/run", response_model=DualExecutionResponse)
+async def run_dual_execution(
+    body: DualExecutionRequest,
+    _: Annotated[dict, Depends(get_current_user)],
+) -> DualExecutionResponse:
+    """
+    2개 에이전트를 자동 순차 실행합니다.
+    1) fast_flow_agent: 빠른 전체 흐름 설계
+    2) slow_meticulous_agent: 꼼꼼한 상세 검증 계획 보강
+    """
+    coordinator = DualExecutionCoordinator()
+    result = coordinator.run(task=body.task, context=body.context)
+
+    # 실행 이력은 부가 기능이므로 실패해도 본 응답은 반환합니다.
+    await record_dual_execution_heartbeat(result, source="api:/agents/dual-execution/run")
+
+    return DualExecutionResponse(**result.to_dict())
 
 
 @router.get("/{agent_id}/logs")
