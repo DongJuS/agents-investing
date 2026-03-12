@@ -1,0 +1,271 @@
+"""
+src/db/queries.py — 코어 에이전트용 DB 쿼리 유틸
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import date
+from typing import Optional
+
+from src.db.models import (
+    AgentHeartbeatRecord,
+    MarketDataPoint,
+    NotificationRecord,
+    PaperOrderRequest,
+    PredictionSignal,
+)
+from src.utils.db_client import execute, fetch, fetchrow, fetchval
+
+
+async def upsert_market_data(points: list[MarketDataPoint]) -> int:
+    """market_data를 upsert하고 반영 건수를 반환합니다."""
+    if not points:
+        return 0
+
+    query = """
+        INSERT INTO market_data (
+            ticker, name, market, timestamp_kst, interval,
+            open, high, low, close, volume,
+            change_pct, market_cap, foreigner_ratio
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9, $10,
+            $11, $12, $13
+        )
+        ON CONFLICT (ticker, timestamp_kst, interval)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            market = EXCLUDED.market,
+            open = EXCLUDED.open,
+            high = EXCLUDED.high,
+            low = EXCLUDED.low,
+            close = EXCLUDED.close,
+            volume = EXCLUDED.volume,
+            change_pct = EXCLUDED.change_pct,
+            market_cap = EXCLUDED.market_cap,
+            foreigner_ratio = EXCLUDED.foreigner_ratio
+    """
+    for p in points:
+        await execute(
+            query,
+            p.ticker,
+            p.name,
+            p.market,
+            p.timestamp_kst,
+            p.interval,
+            p.open,
+            p.high,
+            p.low,
+            p.close,
+            p.volume,
+            p.change_pct,
+            p.market_cap,
+            p.foreigner_ratio,
+        )
+    return len(points)
+
+
+async def list_tickers(limit: int = 30) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT DISTINCT ON (ticker) ticker, name, market
+        FROM market_data
+        ORDER BY ticker, timestamp_kst DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def fetch_recent_ohlcv(ticker: str, days: int = 30) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT
+            ticker, name, timestamp_kst, open, high, low, close, volume, change_pct
+        FROM market_data
+        WHERE ticker = $1
+          AND interval = 'daily'
+          AND timestamp_kst >= NOW() - ($2 || ' days')::interval
+        ORDER BY timestamp_kst DESC
+        """,
+        ticker,
+        days,
+    )
+    return [dict(r) for r in rows]
+
+
+async def latest_close_price(ticker: str) -> Optional[int]:
+    return await fetchval(
+        """
+        SELECT close
+        FROM market_data
+        WHERE ticker = $1
+        ORDER BY timestamp_kst DESC
+        LIMIT 1
+        """,
+        ticker,
+    )
+
+
+async def insert_prediction(signal: PredictionSignal) -> int:
+    prediction_id = await fetchval(
+        """
+        INSERT INTO predictions (
+            agent_id, llm_model, strategy, ticker, signal,
+            confidence, target_price, stop_loss, reasoning_summary,
+            debate_transcript_id, trading_date
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11
+        )
+        RETURNING id
+        """,
+        signal.agent_id,
+        signal.llm_model,
+        signal.strategy,
+        signal.ticker,
+        signal.signal,
+        signal.confidence,
+        signal.target_price,
+        signal.stop_loss,
+        signal.reasoning_summary,
+        signal.debate_transcript_id,
+        signal.trading_date,
+    )
+    return int(prediction_id)
+
+
+async def get_position(ticker: str) -> Optional[dict]:
+    row = await fetchrow(
+        """
+        SELECT ticker, name, quantity, avg_price, current_price, is_paper
+        FROM portfolio_positions
+        WHERE ticker = $1
+        LIMIT 1
+        """,
+        ticker,
+    )
+    return dict(row) if row else None
+
+
+async def save_position(
+    ticker: str,
+    name: str,
+    quantity: int,
+    avg_price: int,
+    current_price: int,
+    is_paper: bool,
+) -> None:
+    if quantity <= 0:
+        await execute("DELETE FROM portfolio_positions WHERE ticker = $1", ticker)
+        return
+
+    await execute(
+        """
+        INSERT INTO portfolio_positions (
+            ticker, name, quantity, avg_price, current_price, is_paper, opened_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+        ON CONFLICT (ticker)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            quantity = EXCLUDED.quantity,
+            avg_price = EXCLUDED.avg_price,
+            current_price = EXCLUDED.current_price,
+            is_paper = EXCLUDED.is_paper,
+            updated_at = NOW()
+        """,
+        ticker,
+        name,
+        quantity,
+        avg_price,
+        current_price,
+        is_paper,
+    )
+
+
+async def insert_trade(order: PaperOrderRequest, circuit_breaker: bool = False) -> None:
+    await execute(
+        """
+        INSERT INTO trade_history (
+            ticker, name, side, quantity, price, amount,
+            signal_source, agent_id, is_paper, circuit_breaker
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, TRUE, $9
+        )
+        """,
+        order.ticker,
+        order.name,
+        order.signal,
+        order.quantity,
+        order.price,
+        order.quantity * order.price,
+        order.signal_source,
+        order.agent_id,
+        circuit_breaker,
+    )
+
+
+async def upsert_tournament_score(
+    agent_id: str,
+    llm_model: str,
+    persona: str,
+    trading_date: date,
+    correct: int,
+    total: int,
+    is_winner: bool,
+) -> None:
+    rolling_accuracy = (correct / total) if total > 0 else None
+    await execute(
+        """
+        INSERT INTO predictor_tournament_scores (
+            agent_id, llm_model, persona, trading_date, correct, total, rolling_accuracy, is_current_winner
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (agent_id, trading_date)
+        DO UPDATE SET
+            llm_model = EXCLUDED.llm_model,
+            persona = EXCLUDED.persona,
+            correct = EXCLUDED.correct,
+            total = EXCLUDED.total,
+            rolling_accuracy = EXCLUDED.rolling_accuracy,
+            is_current_winner = EXCLUDED.is_current_winner,
+            updated_at = NOW()
+        """,
+        agent_id,
+        llm_model,
+        persona,
+        trading_date,
+        correct,
+        total,
+        rolling_accuracy,
+        is_winner,
+    )
+
+
+async def insert_heartbeat(heartbeat: AgentHeartbeatRecord) -> None:
+    await execute(
+        """
+        INSERT INTO agent_heartbeats (agent_id, status, last_action, metrics)
+        VALUES ($1, $2, $3, $4::jsonb)
+        """,
+        heartbeat.agent_id,
+        heartbeat.status,
+        heartbeat.last_action,
+        json.dumps(heartbeat.metrics or {}, ensure_ascii=False),
+    )
+
+
+async def insert_notification(record: NotificationRecord) -> None:
+    await execute(
+        """
+        INSERT INTO notification_history (event_type, message, success, error_msg)
+        VALUES ($1, $2, $3, $4)
+        """,
+        record.event_type,
+        record.message,
+        record.success,
+        record.error_msg,
+    )

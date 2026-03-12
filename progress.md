@@ -7,8 +7,8 @@
 
 ## 🎯 현재 스프린트 목표
 
-**Phase 1 — 인프라 기반 구축**
-Phase 1 코드 구현 완료. 다음 단계는 Phase 2 코어 에이전트(CollectorAgent MVP) 구현.
+**Phase 2 — 코어 에이전트 MVP 구현**
+Phase 2 핵심 모듈 대부분 구현 완료. 남은 작업은 KIS WebSocket 실시간 틱 본연동 및 고도화.
 
 ---
 
@@ -16,16 +16,16 @@ Phase 1 코드 구현 완료. 다음 단계는 Phase 2 코어 에이전트(Colle
 
 ### 🔄 진행 중 (Phase 2)
 
-- [ ] `src/agents/collector.py` — CollectorAgent MVP (FinanceDataReader 일봉 수집)
-- [ ] `src/agents/collector.py` — KIS WebSocket 실시간 틱 수집 추가
-- [ ] `src/db/models.py` + `src/db/queries.py` — Pydantic 모델 및 DB 쿼리 함수
-- [ ] `src/llm/claude_client.py` — Claude CLI / SDK 래퍼
-- [ ] `src/llm/gpt_client.py` — OpenAI GPT-4o 클라이언트
-- [ ] `src/llm/gemini_client.py` — Google Gemini CLI 래퍼
-- [ ] `src/agents/predictor.py` — PredictorAgent MVP (Claude CLI 단일 인스턴스)
-- [ ] `src/agents/portfolio_manager.py` — PortfolioManagerAgent (KIS 페이퍼 주문)
-- [ ] `src/agents/notifier.py` — NotifierAgent (Telegram 기본 알림)
-- [ ] `src/agents/orchestrator.py` — OrchestratorAgent (기본 수집→예측→주문 사이클)
+- [x] `src/agents/collector.py` — CollectorAgent MVP (FinanceDataReader 일봉 수집)
+- [ ] `src/agents/collector.py` — KIS WebSocket 실시간 틱 수집 본연동 (현재: 폴백 스냅샷 모드)
+- [x] `src/db/models.py` + `src/db/queries.py` — Pydantic 모델 및 DB 쿼리 함수
+- [x] `src/llm/claude_client.py` — Claude CLI / SDK 래퍼
+- [x] `src/llm/gpt_client.py` — OpenAI GPT-4o 클라이언트
+- [x] `src/llm/gemini_client.py` — Google Gemini CLI 래퍼
+- [x] `src/agents/predictor.py` — PredictorAgent MVP (Claude 단일 인스턴스 + 규칙 폴백)
+- [x] `src/agents/portfolio_manager.py` — PortfolioManagerAgent (페이퍼 주문 처리)
+- [x] `src/agents/notifier.py` — NotifierAgent (Telegram 기본 알림)
+- [x] `src/agents/orchestrator.py` — OrchestratorAgent (기본 수집→예측→주문 사이클)
 
 ### ✅ 완료
 
@@ -81,6 +81,7 @@ Phase 1 코드 구현 완료. 다음 단계는 Phase 2 코어 에이전트(Colle
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | Phase 2 코어 에이전트 MVP 추가 — collector/predictor/portfolio_manager/notifier/orchestrator, db models/queries, llm clients(claude/gpt/gemini) 구현 | ✅ 완료 |
 | 2026-03-12 | Phase 1 코드 전체 구현 완료 — DB 스키마, FastAPI, KIS OAuth, KRX 휴장일, 헬스체크, 스모크테스트, 프론트엔드 스캐폴딩 | ✅ 완료 |
 | 2026-03-12 | 전체 시스템 문서 작성 완료 (docs/ 9개, .agent/ 2개, 루트 4개) | ✅ 완료 |
 | 2026-03-12 | README.md, architecture.md 프로젝트 내용으로 전면 재작성 | ✅ 완료 |
@@ -93,7 +94,7 @@ Phase 1 코드 구현 완료. 다음 단계는 Phase 2 코어 에이전트(Colle
 
 ```
 Phase 1 인프라 구축    ██████████  100% ✅ (문서 + 코드 완료)
-Phase 2 코어 에이전트  ░░░░░░░░░░    0%
+Phase 2 코어 에이전트  ████████░░   80% (WebSocket 본연동 잔여)
 Phase 3 Strategy A    ░░░░░░░░░░    0%
 Phase 4 Strategy B    ░░░░░░░░░░    0%
 Phase 5 대시보드       ██░░░░░░░░   20% (스캐폴딩 완료, 상세 구현 미완)

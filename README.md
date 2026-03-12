@@ -101,6 +101,24 @@ curl http://localhost:8000/health
 
 ---
 
+## ⚙️ 코어 에이전트 MVP 실행
+
+```bash
+# Collector 일봉 수집 (MVP)
+python -m src.agents.collector --tickers 005930,000660
+
+# Predictor (Claude 단일 인스턴스 + 규칙 폴백)
+python -m src.agents.predictor --agent-id predictor_1 --strategy A --tickers 005930,000660
+
+# PortfolioManager 주문 처리 예시
+python -m src.agents.portfolio_manager --signals-json '[{"ticker":"005930","signal":"BUY","strategy":"A"}]'
+
+# Orchestrator 단일 사이클 (수집 -> 예측 -> 주문 -> 알림)
+python -m src.agents.orchestrator --tickers 005930,000660
+```
+
+---
+
 ## 📂 문서 목록
 
 | 문서 | 내용 |
