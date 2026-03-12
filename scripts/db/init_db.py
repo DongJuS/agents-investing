@@ -107,10 +107,28 @@ CREATE_TABLES: list[str] = [
         correct         INTEGER NOT NULL DEFAULT 0,
         total           INTEGER NOT NULL DEFAULT 0,
         rolling_accuracy NUMERIC(5, 4),
-        is_winner       BOOLEAN NOT NULL DEFAULT FALSE,
+        is_current_winner BOOLEAN NOT NULL DEFAULT FALSE,
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (agent_id, trading_date)
     );
+    -- 과거 스키마 호환: is_winner -> is_current_winner
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'predictor_tournament_scores'
+              AND column_name = 'is_winner'
+        ) AND NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'predictor_tournament_scores'
+              AND column_name = 'is_current_winner'
+        ) THEN
+            ALTER TABLE predictor_tournament_scores
+            RENAME COLUMN is_winner TO is_current_winner;
+        END IF;
+    END $$;
     CREATE INDEX IF NOT EXISTS idx_tournament_date
         ON predictor_tournament_scores (trading_date DESC, rolling_accuracy DESC);
     """,

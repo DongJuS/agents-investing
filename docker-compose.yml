@@ -70,6 +70,8 @@ services:
       ORCH_INTERVAL_SECONDS: 600
       ORCH_RUN_ONCE: "false"
       ORCH_TICKERS: ""
+      ORCH_TOURNAMENT_ROLLING_DAYS: ""
+      ORCH_TOURNAMENT_MIN_SAMPLES: ""
       ORCH_CONSENSUS_ROUNDS: ""
       ORCH_CONSENSUS_THRESHOLD: ""
     depends_on:

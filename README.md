@@ -124,6 +124,9 @@ python -m src.agents.orchestrator --tickers 005930,000660
 # Orchestrator 토너먼트 모드 (Predictor 5개 인스턴스)
 python -m src.agents.orchestrator --tournament --tickers 005930,000660
 
+# Orchestrator 토너먼트 고급 실행 (롤링 윈도우/최소 샘플 override)
+python -m src.agents.orchestrator --tournament --tickers 005930,000660 --tournament-rolling-days 7 --tournament-min-samples 5
+
 # Orchestrator 합의 모드 (Strategy B Debate)
 python -m src.agents.orchestrator --consensus --tickers 005930,000660
 

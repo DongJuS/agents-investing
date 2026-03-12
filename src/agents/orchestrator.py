@@ -45,6 +45,8 @@ class OrchestratorAgent:
         use_tournament: bool = False,
         use_consensus: bool = False,
         use_blend: bool = False,
+        tournament_rolling_days: int | None = None,
+        tournament_min_samples: int | None = None,
         consensus_rounds: int | None = None,
         consensus_threshold: float | None = None,
     ) -> None:
@@ -52,7 +54,10 @@ class OrchestratorAgent:
         self.settings = get_settings()
         self.collector = CollectorAgent()
         self.predictor = PredictorAgent()
-        self.tournament = StrategyATournament()
+        self.tournament = StrategyATournament(
+            rolling_days=tournament_rolling_days,
+            min_samples=tournament_min_samples,
+        )
         self.consensus = StrategyBConsensus(
             max_rounds=consensus_rounds,
             consensus_threshold=consensus_threshold,
@@ -245,6 +250,8 @@ async def _main_async(args: argparse.Namespace) -> None:
         use_tournament=args.tournament,
         use_consensus=args.consensus,
         use_blend=args.blend,
+        tournament_rolling_days=args.tournament_rolling_days,
+        tournament_min_samples=args.tournament_min_samples,
         consensus_rounds=args.consensus_rounds,
         consensus_threshold=args.consensus_threshold,
     )
@@ -262,6 +269,18 @@ def main() -> None:
     parser.add_argument("--tournament", action="store_true", help="Strategy A 5개 인스턴스 토너먼트 모드")
     parser.add_argument("--consensus", action="store_true", help="Strategy B 합의/토론 모드")
     parser.add_argument("--blend", action="store_true", help="Strategy A/B 블렌딩 실행 모드")
+    parser.add_argument(
+        "--tournament-rolling-days",
+        type=int,
+        default=None,
+        help="Strategy A 롤링 점수 계산 일수 (기본: 설정값)",
+    )
+    parser.add_argument(
+        "--tournament-min-samples",
+        type=int,
+        default=None,
+        help="Strategy A 우승자 선정 최소 샘플 수 (기본: 설정값)",
+    )
     parser.add_argument(
         "--consensus-rounds",
         type=int,
