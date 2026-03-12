@@ -55,6 +55,32 @@ services:
       - ./:/app
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://alpha_user:alpha_pass@postgres:5432/alpha_db
+      REDIS_URL: redis://redis:6379/0
+      ORCH_MODE: blend
+      ORCH_INTERVAL_SECONDS: 600
+      ORCH_RUN_ONCE: "false"
+      ORCH_TICKERS: ""
+      ORCH_CONSENSUS_ROUNDS: ""
+      ORCH_CONSENSUS_THRESHOLD: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    command: python scripts/run_orchestrator_worker.py
+
   ui:
     build:
       context: ./ui

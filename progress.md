@@ -76,6 +76,7 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | Docker worker 운용 경로 추가 — `scripts/run_orchestrator_worker.py`, `docker-compose.yml` worker 서비스, ORCH_* 환경변수(.env.example), README 실행 가이드 반영 | ✅ 완료 |
 | 2026-03-12 | Strategy 대시보드 토론 뷰 개선 — `/strategy/b/debates` 최근 토론 이력 API, Debate 목록 선택 UI, 라운드별(Proposer/Challenger/Synthesizer) 상세 렌더링 추가 | ✅ 완료 |
 | 2026-03-12 | Strategy B 다라운드 합의 고도화 — max_rounds/consensus_threshold 설정, 라운드별 토론 누적 저장, Orchestrator/CLI override, Debate API/UI 메타데이터 노출 | ✅ 완료 |
 | 2026-03-12 | PortfolioManager 리스크 가드 추가 — max_position_pct 제한, 일일 손실 서킷브레이커(daily_loss_limit_pct), BLEND 주문 소스 처리 | ✅ 완료 |
@@ -101,7 +102,7 @@ Phase 2 코어 에이전트  ██████████  100% ✅
 Phase 3 Strategy A    ████░░░░░░   40% (토너먼트 기본 구현 완료)
 Phase 4 Strategy B    ███████░░░   70% (다라운드/합의 임계치 반영)
 Phase 5 대시보드       █████░░░░░   50% (토론 이력/라운드 상세 뷰 추가)
-Phase 6 페이퍼 운용    █░░░░░░░░░   10% (리스크 가드 코드 반영)
+Phase 6 페이퍼 운용    ██░░░░░░░░   20% (리스크 가드 + Docker worker 자동 루프 기반)
 Phase 7 실거래 준비    ░░░░░░░░░░    0%
 ```
 

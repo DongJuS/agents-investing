@@ -83,8 +83,8 @@
 cp .env.example .env
 # .env 파일에 API 키 입력 (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, KIS_*, TELEGRAM_*)
 
-# 2. 컨테이너 빌드 및 실행
-docker compose up -d --build postgres redis api ui
+# 2. 컨테이너 빌드 및 실행 (API/UI + Orchestrator worker)
+docker compose up -d --build postgres redis api worker ui
 
 # 3. DB 스키마 초기화 (최초 1회)
 docker compose run --rm api python scripts/db/init_db.py
@@ -92,6 +92,7 @@ docker compose run --rm api python scripts/db/init_db.py
 # 4. 상태 확인
 docker compose ps
 curl http://localhost:8000/health
+docker compose logs -f worker
 ```
 
 접속:
@@ -131,6 +132,10 @@ python -m src.agents.orchestrator --consensus --tickers 005930,000660 --consensu
 
 # Orchestrator 블렌딩 모드 (Strategy A winner + Strategy B consensus)
 python -m src.agents.orchestrator --blend --tickers 005930,000660
+
+# Docker worker 단독 실행/재시작
+docker compose up -d worker
+docker compose restart worker
 ```
 
 ---

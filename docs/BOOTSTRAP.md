@@ -204,6 +204,10 @@ python scripts/health_check.py --agent collector
 # Step 4: OrchestratorAgent 시작
 python -m src.agents.orchestrator
 
+# (Docker 권장) Orchestrator worker 루프 실행
+docker compose up -d worker
+docker compose logs -f worker
+
 # Step 5: 전체 헬스 확인
 python scripts/health_check.py --all
 
@@ -240,6 +244,7 @@ python scripts/smoke_test.py
 | `scripts/fetch_krx_holidays.py` | KRX 휴장일 갱신 |
 | `scripts/health_check.py` | 에이전트 헬스 확인 |
 | `scripts/run_dual_execution.py` | Fast/Slow 2-에이전트 자동 실행 계획 생성 |
+| `scripts/run_orchestrator_worker.py` | Docker/운영 Orchestrator 루프 실행기 |
 | `scripts/test_llm_connections.py` | LLM API 연결 테스트 |
 | `scripts/smoke_test.py` | 전체 플로우 스모크 테스트 |
 
