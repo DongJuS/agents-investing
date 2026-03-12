@@ -41,10 +41,12 @@ export interface DebateTranscript {
   rounds: number;
   consensus_reached: boolean;
   final_signal: string | null;
+  confidence: number | null;
   proposer_content: string | null;
   challenger1_content: string | null;
   challenger2_content: string | null;
   synthesizer_content: string | null;
+  no_consensus_reason: string | null;
   created_at: string;
 }
 

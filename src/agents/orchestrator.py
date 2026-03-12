@@ -45,13 +45,18 @@ class OrchestratorAgent:
         use_tournament: bool = False,
         use_consensus: bool = False,
         use_blend: bool = False,
+        consensus_rounds: int | None = None,
+        consensus_threshold: float | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.settings = get_settings()
         self.collector = CollectorAgent()
         self.predictor = PredictorAgent()
         self.tournament = StrategyATournament()
-        self.consensus = StrategyBConsensus()
+        self.consensus = StrategyBConsensus(
+            max_rounds=consensus_rounds,
+            consensus_threshold=consensus_threshold,
+        )
         self.portfolio = PortfolioManagerAgent()
         self.notifier = NotifierAgent()
         self.use_tournament = use_tournament
@@ -240,6 +245,8 @@ async def _main_async(args: argparse.Namespace) -> None:
         use_tournament=args.tournament,
         use_consensus=args.consensus,
         use_blend=args.blend,
+        consensus_rounds=args.consensus_rounds,
+        consensus_threshold=args.consensus_threshold,
     )
     tickers = args.tickers.split(",") if args.tickers else None
     if args.loop:
@@ -255,6 +262,18 @@ def main() -> None:
     parser.add_argument("--tournament", action="store_true", help="Strategy A 5개 인스턴스 토너먼트 모드")
     parser.add_argument("--consensus", action="store_true", help="Strategy B 합의/토론 모드")
     parser.add_argument("--blend", action="store_true", help="Strategy A/B 블렌딩 실행 모드")
+    parser.add_argument(
+        "--consensus-rounds",
+        type=int,
+        default=None,
+        help="Strategy B 최대 토론 라운드 수 (기본: 설정값)",
+    )
+    parser.add_argument(
+        "--consensus-threshold",
+        type=float,
+        default=None,
+        help="Strategy B 합의 confidence 임계치 0.0~1.0 (기본: 설정값)",
+    )
     parser.add_argument("--interval-seconds", type=int, default=600, help="주기 실행 간격(초)")
     args = parser.parse_args()
     asyncio.run(_main_async(args))

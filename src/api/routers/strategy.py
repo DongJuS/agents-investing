@@ -54,10 +54,12 @@ class DebateResponse(BaseModel):
     rounds: int
     consensus_reached: bool
     final_signal: Optional[str] = None
+    confidence: Optional[float] = None
     proposer_content: Optional[str] = None
     challenger1_content: Optional[str] = None
     challenger2_content: Optional[str] = None
     synthesizer_content: Optional[str] = None
+    no_consensus_reason: Optional[str] = None
     created_at: str
 
 
@@ -188,9 +190,9 @@ async def get_debate_transcript(
     row = await fetchrow(
         """
         SELECT id, trading_date::text AS date, ticker, rounds,
-               consensus_reached, final_signal,
+               consensus_reached, final_signal, confidence::float AS confidence,
                proposer_content, challenger1_content,
-               challenger2_content, synthesizer_content,
+               challenger2_content, synthesizer_content, no_consensus_reason,
                to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS+09:00') AS created_at
         FROM debate_transcripts
         WHERE id = $1

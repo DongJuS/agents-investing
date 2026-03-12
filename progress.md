@@ -65,7 +65,7 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 ### ⏸️ 보류 / 차후
 
 - [~] **Phase 3:** Strategy A Tournament (5개 인스턴스 병렬) — 기본 구현 완료, 운영 고도화 잔여
-- [~] **Phase 4:** Strategy B Consensus/Debate — 기본 구현 + 블렌딩 경로 완료, 다라운드/합의 임계치 고도화 잔여
+- [~] **Phase 4:** Strategy B Consensus/Debate — 다라운드/합의 임계치 고도화 반영, 운영 안정화 잔여
 - [ ] **Phase 5:** Toss 스타일 대시보드 완성 (캔들차트, 토론 뷰어 등)
 - [ ] **Phase 6:** 30일 페이퍼 트레이딩 운용
 - [ ] **Phase 7:** 실거래 준비 및 보안 감사
@@ -76,6 +76,7 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | Strategy B 다라운드 합의 고도화 — max_rounds/consensus_threshold 설정, 라운드별 토론 누적 저장, Orchestrator/CLI override, Debate API/UI 메타데이터 노출 | ✅ 완료 |
 | 2026-03-12 | PortfolioManager 리스크 가드 추가 — max_position_pct 제한, 일일 손실 서킷브레이커(daily_loss_limit_pct), BLEND 주문 소스 처리 | ✅ 완료 |
 | 2026-03-12 | Strategy A/B 블렌딩 실행 경로 추가 — 공통 블렌딩 함수, Orchestrator --blend 모드, BLEND 주문 소스 연동 | ✅ 완료 |
 | 2026-03-12 | Strategy 페이지 고도화 — Strategy B 시그널 목록/토론 전문 조회 UI 연동(useStrategyBSignals/useDebateTranscript) | ✅ 완료 |
@@ -97,8 +98,8 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 Phase 1 인프라 구축    ██████████  100% ✅ (문서 + 코드 완료)
 Phase 2 코어 에이전트  ██████████  100% ✅
 Phase 3 Strategy A    ████░░░░░░   40% (토너먼트 기본 구현 완료)
-Phase 4 Strategy B    █████░░░░░   50% (합의 + 블렌딩 경로 기본 구현 완료)
-Phase 5 대시보드       ███░░░░░░░   30% (전략 페이지 API 연동 추가)
+Phase 4 Strategy B    ███████░░░   70% (다라운드/합의 임계치 반영)
+Phase 5 대시보드       ████░░░░░░   40% (토론 메타데이터 UI 노출 확대)
 Phase 6 페이퍼 운용    █░░░░░░░░░   10% (리스크 가드 코드 반영)
 Phase 7 실거래 준비    ░░░░░░░░░░    0%
 ```

@@ -50,6 +50,13 @@ class Settings(BaseSettings):
 
     # ── Strategy ─────────────────────────────────────────────────────────────
     strategy_blend_ratio: float = Field(default=0.50, alias="STRATEGY_BLEND_RATIO")
+    strategy_b_max_rounds: int = Field(default=2, ge=1, le=5, alias="STRATEGY_B_MAX_ROUNDS")
+    strategy_b_consensus_threshold: float = Field(
+        default=0.67,
+        ge=0.0,
+        le=1.0,
+        alias="STRATEGY_B_CONSENSUS_THRESHOLD",
+    )
 
     # ── Logging ──────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

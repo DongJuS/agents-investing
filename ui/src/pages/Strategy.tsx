@@ -77,8 +77,15 @@ export default function Strategy() {
               ) : debate ? (
                 <>
                   <p className="text-xs text-gray-500">
-                    {debate.ticker} · rounds: {debate.rounds} · final: {debate.final_signal ?? "HOLD"}
+                    {debate.ticker} · rounds: {debate.rounds} · final: {debate.final_signal ?? "HOLD"} ·
+                    confidence: {debate.confidence !== null ? debate.confidence.toFixed(3) : "-"} ·
+                    consensus: {debate.consensus_reached ? "yes" : "no"}
                   </p>
+                  {!debate.consensus_reached && debate.no_consensus_reason && (
+                    <p className="text-xs text-amber-700">
+                      no_consensus_reason: {debate.no_consensus_reason}
+                    </p>
+                  )}
                   <div className="text-xs text-gray-700 space-y-1">
                     <p><strong>Proposer:</strong> {debate.proposer_content ?? "-"}</p>
                     <p><strong>Challenger1:</strong> {debate.challenger1_content ?? "-"}</p>

@@ -42,6 +42,7 @@
 ### Strategy B — 합의 (토론)
 - **4개의 LLM 역할**이 구조화된 토론을 진행
 - Proposer(Claude) → Challenger 1(GPT-4o) + Challenger 2(Gemini) → Synthesizer(Claude)
+- 다라운드 토론(기본 2라운드)과 confidence 임계치(기본 0.67) 기준으로 합의 판정
 - 합의 도달 시 해당 시그널로 거래; 미도달 시 HOLD
 
 두 전략은 **동시에** 운용되며, 사용자가 블렌드 비율을 조정할 수 있습니다.
@@ -124,6 +125,9 @@ python -m src.agents.orchestrator --tournament --tickers 005930,000660
 
 # Orchestrator 합의 모드 (Strategy B Debate)
 python -m src.agents.orchestrator --consensus --tickers 005930,000660
+
+# Orchestrator 합의 모드 고급 실행 (다라운드 + 임계치 override)
+python -m src.agents.orchestrator --consensus --tickers 005930,000660 --consensus-rounds 3 --consensus-threshold 0.72
 
 # Orchestrator 블렌딩 모드 (Strategy A winner + Strategy B consensus)
 python -m src.agents.orchestrator --blend --tickers 005930,000660
