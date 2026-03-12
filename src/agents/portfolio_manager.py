@@ -44,10 +44,15 @@ class PortfolioManagerAgent:
         price = int(target_price) if target_price else latest_close
         return name, price
 
-    async def process_signal(self, signal: PredictionSignal) -> Optional[dict]:
+    async def process_signal(
+        self,
+        signal: PredictionSignal,
+        signal_source_override: Optional[str] = None,
+    ) -> Optional[dict]:
         if signal.signal == "HOLD":
             return None
 
+        signal_source = signal_source_override or signal.strategy
         name, price = await self._resolve_name_and_price(signal.ticker, signal.target_price)
         if price <= 0:
             logger.warning("가격 정보 없음으로 주문 스킵: %s", signal.ticker)
@@ -76,7 +81,7 @@ class PortfolioManagerAgent:
                 signal="BUY",
                 quantity=order_qty,
                 price=price,
-                signal_source=signal.strategy,
+                signal_source=signal_source,
                 agent_id=self.agent_id,
             )
             await insert_trade(order)
@@ -107,7 +112,7 @@ class PortfolioManagerAgent:
             signal="SELL",
             quantity=sell_qty,
             price=price,
-            signal_source=signal.strategy,
+            signal_source=signal_source,
             agent_id=self.agent_id,
         )
         await insert_trade(order)
@@ -118,10 +123,14 @@ class PortfolioManagerAgent:
             "price": order.price,
         }
 
-    async def process_predictions(self, predictions: list[PredictionSignal]) -> list[dict]:
+    async def process_predictions(
+        self,
+        predictions: list[PredictionSignal],
+        signal_source_override: Optional[str] = None,
+    ) -> list[dict]:
         orders: list[dict] = []
         for signal in predictions:
-            order = await self.process_signal(signal)
+            order = await self.process_signal(signal, signal_source_override=signal_source_override)
             if order:
                 orders.append(order)
 

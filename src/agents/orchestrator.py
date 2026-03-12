@@ -24,10 +24,12 @@ from src.agents.collector import CollectorAgent
 from src.agents.notifier import NotifierAgent
 from src.agents.portfolio_manager import PortfolioManagerAgent
 from src.agents.predictor import PredictorAgent
+from src.agents.blending import blend_strategy_signals
 from src.agents.strategy_b_consensus import StrategyBConsensus
 from src.agents.strategy_a_tournament import StrategyATournament
 from src.db.models import AgentHeartbeatRecord
 from src.db.queries import insert_heartbeat
+from src.utils.config import get_settings
 from src.utils.db_client import fetch
 from src.utils.logging import get_logger, setup_logging
 from src.utils.redis_client import TOPIC_ALERTS, publish_message, set_heartbeat
@@ -42,8 +44,10 @@ class OrchestratorAgent:
         agent_id: str = "orchestrator_agent",
         use_tournament: bool = False,
         use_consensus: bool = False,
+        use_blend: bool = False,
     ) -> None:
         self.agent_id = agent_id
+        self.settings = get_settings()
         self.collector = CollectorAgent()
         self.predictor = PredictorAgent()
         self.tournament = StrategyATournament()
@@ -52,6 +56,7 @@ class OrchestratorAgent:
         self.notifier = NotifierAgent()
         self.use_tournament = use_tournament
         self.use_consensus = use_consensus
+        self.use_blend = use_blend
 
     async def _load_winner_predictions(self, winner_agent_id: str, tickers: list[str]) -> list:
         from src.db.models import PredictionSignal
@@ -87,6 +92,55 @@ class OrchestratorAgent:
             for r in rows
         ]
 
+    @staticmethod
+    def _blend_predictions(predictions_a: list, predictions_b: list, ratio: float) -> list:
+        from src.db.models import PredictionSignal
+
+        by_ticker_a = {p.ticker: p for p in predictions_a}
+        by_ticker_b = {p.ticker: p for p in predictions_b}
+        tickers = sorted(set(by_ticker_a.keys()) | set(by_ticker_b.keys()))
+        blended_predictions: list[PredictionSignal] = []
+
+        for ticker in tickers:
+            pa = by_ticker_a.get(ticker)
+            pb = by_ticker_b.get(ticker)
+            blended = blend_strategy_signals(
+                strategy_a_signal=pa.signal if pa else None,
+                strategy_a_confidence=pa.confidence if pa else None,
+                strategy_b_signal=pb.signal if pb else None,
+                strategy_b_confidence=pb.confidence if pb else None,
+                blend_ratio=ratio,
+            )
+
+            if pb and ratio >= 0.5:
+                target_price = pb.target_price
+                stop_loss = pb.stop_loss
+            elif pa:
+                target_price = pa.target_price
+                stop_loss = pa.stop_loss
+            else:
+                target_price = None
+                stop_loss = None
+
+            blended_predictions.append(
+                PredictionSignal(
+                    agent_id="blend_agent",
+                    llm_model="blend",
+                    strategy="A",  # DB 제약(A/B) 때문에 A로 저장/전달하고 주문 소스는 BLEND로 분리 전달
+                    ticker=ticker,
+                    signal=blended.combined_signal,
+                    confidence=blended.combined_confidence,
+                    target_price=target_price,
+                    stop_loss=stop_loss,
+                    reasoning_summary=(
+                        f"blend_ratio={ratio:.2f}, conflict={blended.conflict}, "
+                        f"A={pa.signal if pa else 'HOLD'}, B={pb.signal if pb else 'HOLD'}"
+                    ),
+                    trading_date=date.today(),
+                )
+            )
+        return blended_predictions
+
     async def run_cycle(self, tickers: list[str] | None = None) -> dict:
         started = datetime.utcnow()
         try:
@@ -94,16 +148,28 @@ class OrchestratorAgent:
             cycle_tickers = [p.ticker for p in collected_points] or (tickers or [])
 
             winner = None
-            if self.use_consensus:
+            if self.use_blend:
+                tournament_result = await self.tournament.run_daily_tournament(cycle_tickers)
+                winner = tournament_result["winner_agent_id"]
+                predictions_a = await self._load_winner_predictions(winner, cycle_tickers)
+                predictions_b = await self.consensus.run(cycle_tickers)
+                ratio = self.settings.strategy_blend_ratio
+                predictions = self._blend_predictions(predictions_a, predictions_b, ratio)
+                orders = await self.portfolio.process_predictions(
+                    predictions,
+                    signal_source_override="BLEND",
+                )
+            elif self.use_consensus:
                 predictions = await self.consensus.run(cycle_tickers)
+                orders = await self.portfolio.process_predictions(predictions)
             elif self.use_tournament:
                 tournament_result = await self.tournament.run_daily_tournament(cycle_tickers)
                 winner = tournament_result["winner_agent_id"]
                 predictions = await self._load_winner_predictions(winner, cycle_tickers)
+                orders = await self.portfolio.process_predictions(predictions)
             else:
                 predictions = await self.predictor.run_once(tickers=cycle_tickers)
-
-            orders = await self.portfolio.process_predictions(predictions)
+                orders = await self.portfolio.process_predictions(predictions)
             await self.notifier.send_cycle_summary(
                 collected=len(collected_points),
                 predicted=len(predictions),
@@ -116,9 +182,13 @@ class OrchestratorAgent:
                 "orders": len(orders),
                 "winner_agent_id": winner,
                 "mode": (
-                    "consensus"
-                    if self.use_consensus
-                    else ("tournament" if self.use_tournament else "single_predictor")
+                    "blend"
+                    if self.use_blend
+                    else (
+                        "consensus"
+                        if self.use_consensus
+                        else ("tournament" if self.use_tournament else "single_predictor")
+                    )
                 ),
                 "started_at": started.isoformat() + "Z",
                 "finished_at": datetime.utcnow().isoformat() + "Z",
@@ -166,7 +236,11 @@ class OrchestratorAgent:
 
 
 async def _main_async(args: argparse.Namespace) -> None:
-    agent = OrchestratorAgent(use_tournament=args.tournament, use_consensus=args.consensus)
+    agent = OrchestratorAgent(
+        use_tournament=args.tournament,
+        use_consensus=args.consensus,
+        use_blend=args.blend,
+    )
     tickers = args.tickers.split(",") if args.tickers else None
     if args.loop:
         await agent.run_loop(interval_seconds=args.interval_seconds, tickers=tickers)
@@ -180,6 +254,7 @@ def main() -> None:
     parser.add_argument("--loop", action="store_true", help="주기 실행 모드")
     parser.add_argument("--tournament", action="store_true", help="Strategy A 5개 인스턴스 토너먼트 모드")
     parser.add_argument("--consensus", action="store_true", help="Strategy B 합의/토론 모드")
+    parser.add_argument("--blend", action="store_true", help="Strategy A/B 블렌딩 실행 모드")
     parser.add_argument("--interval-seconds", type=int, default=600, help="주기 실행 간격(초)")
     args = parser.parse_args()
     asyncio.run(_main_async(args))

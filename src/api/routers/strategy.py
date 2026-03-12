@@ -7,6 +7,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
+from src.agents.blending import blend_strategy_signals
 from src.api.deps import get_current_user
 from src.utils.db_client import fetch, fetchrow
 from src.utils.config import get_settings
@@ -243,30 +244,22 @@ async def get_combined_signals(
     signals: list[CombinedSignalItem] = []
 
     for r in rows:
-        sig_a = r["signal_a"] or "HOLD"
-        sig_b = r["signal_b"] or "HOLD"
-        conflict = sig_a != sig_b and not (
-            sig_a == "HOLD" or sig_b == "HOLD"
+        blended = blend_strategy_signals(
+            strategy_a_signal=r["signal_a"],
+            strategy_a_confidence=r["conf_a"],
+            strategy_b_signal=r["signal_b"],
+            strategy_b_confidence=r["conf_b"],
+            blend_ratio=ratio,
         )
-
-        # 블렌딩: B 전략 가중치 = ratio, A 전략 가중치 = 1 - ratio
-        if sig_a == sig_b:
-            combined = sig_a
-        elif conflict:
-            combined = "HOLD"
-        else:
-            combined = sig_b if sig_b != "HOLD" else sig_a
-
-        combined_conf = r["conf_a"] * (1 - ratio) + r["conf_b"] * ratio
 
         signals.append(
             CombinedSignalItem(
                 ticker=r["ticker"],
                 strategy_a_signal=r["signal_a"],
                 strategy_b_signal=r["signal_b"],
-                combined_signal=combined,
-                combined_confidence=round(combined_conf, 3),
-                conflict=conflict,
+                combined_signal=blended.combined_signal,
+                combined_confidence=blended.combined_confidence,
+                conflict=blended.conflict,
             )
         )
 

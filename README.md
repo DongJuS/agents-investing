@@ -124,6 +124,9 @@ python -m src.agents.orchestrator --tournament --tickers 005930,000660
 
 # Orchestrator 합의 모드 (Strategy B Debate)
 python -m src.agents.orchestrator --consensus --tickers 005930,000660
+
+# Orchestrator 블렌딩 모드 (Strategy A winner + Strategy B consensus)
+python -m src.agents.orchestrator --blend --tickers 005930,000660
 ```
 
 ---
