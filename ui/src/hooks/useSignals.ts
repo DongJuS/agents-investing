@@ -23,6 +23,31 @@ export interface TournamentRank {
   is_current_winner: boolean;
 }
 
+export interface StrategyBSignal {
+  agent_id: string;
+  llm_model: string;
+  ticker: string;
+  signal: "BUY" | "SELL" | "HOLD";
+  confidence: number | null;
+  reasoning_summary: string | null;
+  trading_date: string;
+  debate_transcript_id: number | null;
+}
+
+export interface DebateTranscript {
+  id: number;
+  date: string;
+  ticker: string;
+  rounds: number;
+  consensus_reached: boolean;
+  final_signal: string | null;
+  proposer_content: string | null;
+  challenger1_content: string | null;
+  challenger2_content: string | null;
+  synthesizer_content: string | null;
+  created_at: string;
+}
+
 async function fetchCombinedSignals(): Promise<{
   blend_ratio: number;
   signals: CombinedSignal[];
@@ -39,6 +64,19 @@ async function fetchTournament(): Promise<{
   return data;
 }
 
+async function fetchStrategyBSignals(): Promise<{
+  date: string;
+  signals: StrategyBSignal[];
+}> {
+  const { data } = await api.get("/strategy/b/signals");
+  return data;
+}
+
+async function fetchDebateTranscript(debateId: number): Promise<DebateTranscript> {
+  const { data } = await api.get(`/strategy/b/debate/${debateId}`);
+  return data;
+}
+
 export function useCombinedSignals() {
   return useQuery({
     queryKey: ["strategy", "combined"],
@@ -52,5 +90,21 @@ export function useTournament() {
     queryKey: ["strategy", "tournament"],
     queryFn: fetchTournament,
     refetchInterval: 60_000,
+  });
+}
+
+export function useStrategyBSignals() {
+  return useQuery({
+    queryKey: ["strategy", "b-signals"],
+    queryFn: fetchStrategyBSignals,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useDebateTranscript(debateId: number | null) {
+  return useQuery({
+    queryKey: ["strategy", "debate", debateId],
+    queryFn: () => fetchDebateTranscript(debateId as number),
+    enabled: debateId !== null,
   });
 }
