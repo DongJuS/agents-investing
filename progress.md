@@ -76,6 +76,7 @@ Strategy A/B 기본 실행기와 블렌딩 실행 경로를 구현했고, 남은
 
 | 날짜 | 작업 내용 | 상태 |
 |------|-----------|------|
+| 2026-03-12 | PortfolioManager 리스크 가드 추가 — max_position_pct 제한, 일일 손실 서킷브레이커(daily_loss_limit_pct), BLEND 주문 소스 처리 | ✅ 완료 |
 | 2026-03-12 | Strategy A/B 블렌딩 실행 경로 추가 — 공통 블렌딩 함수, Orchestrator --blend 모드, BLEND 주문 소스 연동 | ✅ 완료 |
 | 2026-03-12 | Strategy 페이지 고도화 — Strategy B 시그널 목록/토론 전문 조회 UI 연동(useStrategyBSignals/useDebateTranscript) | ✅ 완료 |
 | 2026-03-12 | Strategy B Consensus MVP 구현 — proposer/challenger/synthesizer 흐름, debate_transcripts 저장, B 예측 기록, Orchestrator --consensus 연동 | ✅ 완료 |
@@ -98,7 +99,7 @@ Phase 2 코어 에이전트  ██████████  100% ✅
 Phase 3 Strategy A    ████░░░░░░   40% (토너먼트 기본 구현 완료)
 Phase 4 Strategy B    █████░░░░░   50% (합의 + 블렌딩 경로 기본 구현 완료)
 Phase 5 대시보드       ███░░░░░░░   30% (전략 페이지 API 연동 추가)
-Phase 6 페이퍼 운용    ░░░░░░░░░░    0%
+Phase 6 페이퍼 운용    █░░░░░░░░░   10% (리스크 가드 코드 반영)
 Phase 7 실거래 준비    ░░░░░░░░░░    0%
 ```
 

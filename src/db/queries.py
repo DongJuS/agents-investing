@@ -231,6 +231,52 @@ async def save_position(
     )
 
 
+async def portfolio_total_value() -> int:
+    value = await fetchval(
+        """
+        SELECT COALESCE(SUM(quantity * current_price), 0)
+        FROM portfolio_positions
+        WHERE quantity > 0
+        """
+    )
+    return int(value or 0)
+
+
+async def get_portfolio_config() -> dict:
+    row = await fetchrow(
+        """
+        SELECT strategy_blend_ratio, max_position_pct, daily_loss_limit_pct, is_paper_trading
+        FROM portfolio_config
+        LIMIT 1
+        """
+    )
+    if not row:
+        return {
+            "strategy_blend_ratio": 0.5,
+            "max_position_pct": 20,
+            "daily_loss_limit_pct": 3,
+            "is_paper_trading": True,
+        }
+    return dict(row)
+
+
+async def today_trade_totals() -> dict:
+    row = await fetchrow(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN side = 'BUY' THEN amount ELSE 0 END), 0) AS buy_total,
+            COALESCE(SUM(CASE WHEN side = 'SELL' THEN amount ELSE 0 END), 0) AS sell_total
+        FROM trade_history
+        WHERE executed_at::date = CURRENT_DATE
+          AND is_paper = TRUE
+        """
+    )
+    return {
+        "buy_total": int(row["buy_total"]) if row else 0,
+        "sell_total": int(row["sell_total"]) if row else 0,
+    }
+
+
 async def insert_trade(order: PaperOrderRequest, circuit_breaker: bool = False) -> None:
     await execute(
         """

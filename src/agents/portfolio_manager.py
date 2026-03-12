@@ -21,13 +21,16 @@ load_dotenv(ROOT / ".env")
 from src.db.models import AgentHeartbeatRecord, PaperOrderRequest, PredictionSignal
 from src.db.queries import (
     fetch_recent_ohlcv,
+    get_portfolio_config,
     get_position,
     insert_heartbeat,
     insert_trade,
+    portfolio_total_value,
     save_position,
+    today_trade_totals,
 )
 from src.utils.logging import get_logger, setup_logging
-from src.utils.redis_client import TOPIC_ORDERS, publish_message, set_heartbeat
+from src.utils.redis_client import TOPIC_ALERTS, TOPIC_ORDERS, publish_message, set_heartbeat
 
 setup_logging()
 logger = get_logger(__name__)
@@ -48,11 +51,13 @@ class PortfolioManagerAgent:
         self,
         signal: PredictionSignal,
         signal_source_override: Optional[str] = None,
+        risk_config: Optional[dict] = None,
     ) -> Optional[dict]:
         if signal.signal == "HOLD":
             return None
 
         signal_source = signal_source_override or signal.strategy
+        cfg = risk_config or {}
         name, price = await self._resolve_name_and_price(signal.ticker, signal.target_price)
         if price <= 0:
             logger.warning("가격 정보 없음으로 주문 스킵: %s", signal.ticker)
@@ -61,10 +66,28 @@ class PortfolioManagerAgent:
         position = await get_position(signal.ticker)
         if signal.signal == "BUY":
             order_qty = 1
+            max_position_pct = int(cfg.get("max_position_pct", 20))
+            total_value = await portfolio_total_value()
+            current_value = (
+                int(position["quantity"]) * int(position["current_price"]) if position else 0
+            )
+            next_value = current_value + (order_qty * price)
+            denominator = max(total_value + (order_qty * price), 1)
+            next_weight_pct = (next_value / denominator) * 100
+            if next_weight_pct > max_position_pct:
+                logger.warning(
+                    "BUY 스킵: max_position_pct 초과 (ticker=%s, next=%.2f%%, limit=%s%%)",
+                    signal.ticker,
+                    next_weight_pct,
+                    max_position_pct,
+                )
+                return None
+
             prev_qty = int(position["quantity"]) if position else 0
             prev_avg = int(position["avg_price"]) if position else 0
             new_qty = prev_qty + order_qty
             new_avg = int(((prev_qty * prev_avg) + (order_qty * price)) / new_qty)
+            is_paper = bool(cfg.get("is_paper_trading", True))
 
             await save_position(
                 ticker=signal.ticker,
@@ -72,7 +95,7 @@ class PortfolioManagerAgent:
                 quantity=new_qty,
                 avg_price=new_avg,
                 current_price=price,
-                is_paper=True,
+                is_paper=is_paper,
             )
 
             order = PaperOrderRequest(
@@ -103,7 +126,7 @@ class PortfolioManagerAgent:
             quantity=0,
             avg_price=0,
             current_price=price,
-            is_paper=True,
+            is_paper=bool(cfg.get("is_paper_trading", True)),
         )
 
         order = PaperOrderRequest(
@@ -128,9 +151,47 @@ class PortfolioManagerAgent:
         predictions: list[PredictionSignal],
         signal_source_override: Optional[str] = None,
     ) -> list[dict]:
+        cfg = await get_portfolio_config()
+        totals = await today_trade_totals()
+        buy_total = totals["buy_total"]
+        sell_total = totals["sell_total"]
+        pnl_pct = ((sell_total - buy_total) / buy_total * 100) if buy_total > 0 else 0.0
+        daily_loss_limit_pct = int(cfg.get("daily_loss_limit_pct", 3))
+
+        if buy_total > 0 and pnl_pct <= -daily_loss_limit_pct:
+            message = (
+                f"일일 손실 한도 도달로 주문 중단 (pnl={pnl_pct:.2f}%, "
+                f"limit=-{daily_loss_limit_pct}%)"
+            )
+            logger.warning(message)
+            await publish_message(
+                TOPIC_ALERTS,
+                json.dumps(
+                    {
+                        "type": "circuit_breaker",
+                        "message": message,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            await set_heartbeat(self.agent_id)
+            await insert_heartbeat(
+                AgentHeartbeatRecord(
+                    agent_id=self.agent_id,
+                    status="degraded",
+                    last_action=message,
+                    metrics={"pnl_pct": round(pnl_pct, 3)},
+                )
+            )
+            return []
+
         orders: list[dict] = []
         for signal in predictions:
-            order = await self.process_signal(signal, signal_source_override=signal_source_override)
+            order = await self.process_signal(
+                signal,
+                signal_source_override=signal_source_override,
+                risk_config=cfg,
+            )
             if order:
                 orders.append(order)
 
