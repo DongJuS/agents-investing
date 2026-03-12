@@ -24,8 +24,8 @@ export default function Layout() {
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/92 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-[1120px] items-center justify-between px-5 md:px-8">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#3182F6] text-white">
-              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-[2]">
+            <div className="flex h-[10px] w-[10px] items-center justify-center rounded-[3px] bg-[#3182F6] text-white">
+              <svg viewBox="0 0 24 24" className="h-[10px] w-[10px] fill-none stroke-current stroke-[2]">
                 <path d="M13 2L4 14h6l-1 8 9-12h-6z" />
               </svg>
             </div>
