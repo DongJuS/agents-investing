@@ -138,6 +138,19 @@ docker compose up -d worker
 docker compose restart worker
 ```
 
+## ✅ 테스트 실행
+
+```bash
+# 1) 단위 테스트 (핵심 로직: blending / consensus fallback / risk guard)
+python3 -m unittest discover -s test -p 'test_*.py' -v
+
+# 2) 백엔드 컴파일 검증
+PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m compileall src scripts test
+
+# 3) 통합 스모크 테스트 (Redis/API 실행 필요)
+python3 scripts/smoke_test.py --skip-telegram
+```
+
 ---
 
 ## 📂 문서 목록
