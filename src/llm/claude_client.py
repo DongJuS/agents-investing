@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
+from src.utils.secret_validation import is_placeholder_secret
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,7 @@ class ClaudeClient:
         self.api_key = settings.anthropic_api_key
         self._client: Optional[Any] = None
 
-        if not self.api_key:
+        if is_placeholder_secret(self.api_key):
             return
 
         try:
