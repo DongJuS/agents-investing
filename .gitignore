@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+
+.DS_Store
+
+.agent/
+.mcp/
+
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+dist/

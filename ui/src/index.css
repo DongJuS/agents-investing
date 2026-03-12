@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900 font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  /* Toss 스타일 카드 */
+  .card {
+    @apply bg-white rounded-2xl shadow-sm border border-surface-border p-6;
+  }
+
+  /* 수익 / 손실 텍스트 */
+  .text-profit {
+    @apply text-positive font-semibold;
+  }
+  .text-loss {
+    @apply text-negative font-semibold;
+  }
+
+  /* 큰 숫자 (Toss 스타일) */
+  .number-lg {
+    @apply text-3xl font-bold tabular-nums;
+  }
+
+  /* 시그널 배지 */
+  .badge-buy {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800;
+  }
+  .badge-sell {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800;
+  }
+  .badge-hold {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600;
+  }
+
+  /* 에이전트 상태 점 */
+  .dot-healthy { @apply w-2 h-2 rounded-full bg-green-400 inline-block; }
+  .dot-degraded { @apply w-2 h-2 rounded-full bg-yellow-400 inline-block; }
+  .dot-dead { @apply w-2 h-2 rounded-full bg-red-400 inline-block; }
+}

@@ -1,0 +1,273 @@
+"""
+src/api/routers/strategy.py — Strategy A/B 시그널 및 토너먼트 라우터
+"""
+
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+
+from src.api.deps import get_current_user
+from src.utils.db_client import fetch, fetchrow
+from src.utils.config import get_settings
+
+router = APIRouter()
+
+
+class SignalItem(BaseModel):
+    agent_id: str
+    llm_model: str
+    ticker: str
+    signal: str
+    confidence: Optional[float] = None
+    target_price: Optional[int] = None
+    stop_loss: Optional[int] = None
+    reasoning_summary: Optional[str] = None
+
+
+class StrategyAResponse(BaseModel):
+    date: str
+    winner_agent_id: Optional[str] = None
+    signals: list[SignalItem]
+
+
+class TournamentRankItem(BaseModel):
+    agent_id: str
+    llm_model: str
+    persona: str
+    rolling_accuracy: Optional[float] = None
+    correct: int
+    total: int
+    is_current_winner: bool
+
+
+class TournamentResponse(BaseModel):
+    period_days: int
+    rankings: list[TournamentRankItem]
+
+
+class DebateResponse(BaseModel):
+    id: int
+    date: str
+    ticker: str
+    rounds: int
+    consensus_reached: bool
+    final_signal: Optional[str] = None
+    proposer_content: Optional[str] = None
+    challenger1_content: Optional[str] = None
+    challenger2_content: Optional[str] = None
+    synthesizer_content: Optional[str] = None
+    created_at: str
+
+
+class CombinedSignalItem(BaseModel):
+    ticker: str
+    strategy_a_signal: Optional[str] = None
+    strategy_b_signal: Optional[str] = None
+    combined_signal: str
+    combined_confidence: Optional[float] = None
+    conflict: bool
+
+
+class CombinedResponse(BaseModel):
+    blend_ratio: float
+    signals: list[CombinedSignalItem]
+
+
+@router.get("/a/signals", response_model=StrategyAResponse)
+async def get_strategy_a_signals(
+    _: Annotated[dict, Depends(get_current_user)],
+    date: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+) -> StrategyAResponse:
+    """Strategy A (Tournament) 최신 시그널을 반환합니다."""
+    date_filter = date or "CURRENT_DATE"
+
+    rows = await fetch(
+        f"""
+        SELECT p.agent_id, p.llm_model, p.ticker, p.signal,
+               p.confidence::float, p.target_price, p.stop_loss, p.reasoning_summary,
+               p.trading_date::text AS trading_date,
+               s.is_current_winner
+        FROM predictions p
+        LEFT JOIN predictor_tournament_scores s
+            ON p.agent_id = s.agent_id AND p.trading_date = s.trading_date
+        WHERE p.strategy = 'A'
+          AND p.trading_date = {date_filter if date else '$1'}::date
+        ORDER BY p.agent_id
+        """,
+        *([date] if date else []),
+    )
+
+    winner = next((r["agent_id"] for r in rows if r["is_current_winner"]), None)
+
+    return StrategyAResponse(
+        date=date or "latest",
+        winner_agent_id=winner,
+        signals=[
+            SignalItem(
+                agent_id=r["agent_id"],
+                llm_model=r["llm_model"],
+                ticker=r["ticker"],
+                signal=r["signal"],
+                confidence=r["confidence"],
+                target_price=r["target_price"],
+                stop_loss=r["stop_loss"],
+                reasoning_summary=r["reasoning_summary"],
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get("/a/tournament", response_model=TournamentResponse)
+async def get_tournament(
+    _: Annotated[dict, Depends(get_current_user)],
+    days: int = Query(default=5, ge=1, le=30),
+) -> TournamentResponse:
+    """최근 N거래일 토너먼트 점수 및 순위를 반환합니다."""
+    rows = await fetch(
+        """
+        SELECT agent_id, llm_model, persona,
+               rolling_accuracy::float,
+               correct, total, is_current_winner
+        FROM predictor_tournament_scores
+        WHERE trading_date = (
+            SELECT MAX(trading_date) FROM predictor_tournament_scores
+        )
+        ORDER BY rolling_accuracy DESC NULLS LAST
+        """
+    )
+
+    return TournamentResponse(
+        period_days=days,
+        rankings=[
+            TournamentRankItem(
+                agent_id=r["agent_id"],
+                llm_model=r["llm_model"],
+                persona=r["persona"],
+                rolling_accuracy=r["rolling_accuracy"],
+                correct=r["correct"],
+                total=r["total"],
+                is_current_winner=r["is_current_winner"],
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get("/b/signals")
+async def get_strategy_b_signals(
+    _: Annotated[dict, Depends(get_current_user)],
+    date: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+) -> dict:
+    """Strategy B (Consensus) 최신 합의 시그널을 반환합니다."""
+    rows = await fetch(
+        """
+        SELECT p.agent_id, p.llm_model, p.ticker, p.signal,
+               p.confidence::float, p.reasoning_summary,
+               p.trading_date::text,
+               p.debate_transcript_id
+        FROM predictions p
+        WHERE p.strategy = 'B'
+          AND p.trading_date = COALESCE($1::date, CURRENT_DATE)
+        ORDER BY p.ticker
+        """,
+        date,
+    )
+
+    return {"date": date or "today", "signals": [dict(r) for r in rows]}
+
+
+@router.get("/b/debate/{debate_id}", response_model=DebateResponse)
+async def get_debate_transcript(
+    debate_id: int,
+    _: Annotated[dict, Depends(get_current_user)],
+) -> DebateResponse:
+    """Strategy B 토론 전문을 조회합니다."""
+    row = await fetchrow(
+        """
+        SELECT id, trading_date::text AS date, ticker, rounds,
+               consensus_reached, final_signal,
+               proposer_content, challenger1_content,
+               challenger2_content, synthesizer_content,
+               to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS+09:00') AS created_at
+        FROM debate_transcripts
+        WHERE id = $1
+        """,
+        debate_id,
+    )
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"토론 ID {debate_id}를 찾을 수 없습니다.",
+        )
+
+    return DebateResponse(**dict(row))
+
+
+@router.get("/combined", response_model=CombinedResponse)
+async def get_combined_signals(
+    _: Annotated[dict, Depends(get_current_user)],
+) -> CombinedResponse:
+    """두 전략이 블렌딩된 최종 시그널을 반환합니다."""
+    settings = get_settings()
+
+    rows = await fetch(
+        """
+        WITH a AS (
+            SELECT ticker, signal AS signal_a, confidence AS conf_a
+            FROM predictions
+            WHERE strategy = 'A' AND trading_date = CURRENT_DATE
+              AND agent_id IN (
+                  SELECT agent_id FROM predictor_tournament_scores
+                  WHERE is_current_winner = TRUE
+                  ORDER BY trading_date DESC LIMIT 1
+              )
+        ),
+        b AS (
+            SELECT ticker, signal AS signal_b, confidence AS conf_b
+            FROM predictions
+            WHERE strategy = 'B' AND trading_date = CURRENT_DATE
+        )
+        SELECT
+            COALESCE(a.ticker, b.ticker) AS ticker,
+            a.signal_a, b.signal_b,
+            COALESCE(a.conf_a, 0)::float AS conf_a,
+            COALESCE(b.conf_b, 0)::float AS conf_b
+        FROM a FULL OUTER JOIN b ON a.ticker = b.ticker
+        """
+    )
+
+    ratio = settings.strategy_blend_ratio
+    signals: list[CombinedSignalItem] = []
+
+    for r in rows:
+        sig_a = r["signal_a"] or "HOLD"
+        sig_b = r["signal_b"] or "HOLD"
+        conflict = sig_a != sig_b and not (
+            sig_a == "HOLD" or sig_b == "HOLD"
+        )
+
+        # 블렌딩: B 전략 가중치 = ratio, A 전략 가중치 = 1 - ratio
+        if sig_a == sig_b:
+            combined = sig_a
+        elif conflict:
+            combined = "HOLD"
+        else:
+            combined = sig_b if sig_b != "HOLD" else sig_a
+
+        combined_conf = r["conf_a"] * (1 - ratio) + r["conf_b"] * ratio
+
+        signals.append(
+            CombinedSignalItem(
+                ticker=r["ticker"],
+                strategy_a_signal=r["signal_a"],
+                strategy_b_signal=r["signal_b"],
+                combined_signal=combined,
+                combined_confidence=round(combined_conf, 3),
+                conflict=conflict,
+            )
+        )
+
+    return CombinedResponse(blend_ratio=ratio, signals=signals)
