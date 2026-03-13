@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     kis_app_secret: str = Field(default="", alias="KIS_APP_SECRET")
     kis_account_number: str = Field(default="", alias="KIS_ACCOUNT_NUMBER")
     kis_is_paper_trading: bool = Field(default=True, alias="KIS_IS_PAPER_TRADING")
+    paper_broker_backend: str = Field(default="internal", alias="PAPER_BROKER_BACKEND")
+    kis_request_timeout_seconds: int = Field(default=15, ge=5, le=60, alias="KIS_REQUEST_TIMEOUT_SECONDS")
 
     # ── Telegram ─────────────────────────────────────────────────────────────
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
@@ -93,9 +95,19 @@ class Settings(BaseSettings):
             return "https://openapivts.koreainvestment.com:29443"
         return "https://openapi.koreainvestment.com:9443"
 
+    def kis_base_url_for_scope(self, account_scope: str) -> str:
+        if account_scope == "paper":
+            return "https://openapivts.koreainvestment.com:29443"
+        return "https://openapi.koreainvestment.com:9443"
+
     @property
     def kis_websocket_url(self) -> str:
         if self.kis_is_paper_trading:
+            return "ws://ops.koreainvestment.com:31000"
+        return "ws://ops.koreainvestment.com:21000"
+
+    def kis_websocket_url_for_scope(self, account_scope: str) -> str:
+        if account_scope == "paper":
             return "ws://ops.koreainvestment.com:31000"
         return "ws://ops.koreainvestment.com:21000"
 

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
-from src.brokers import PaperBroker
+from src.brokers import build_paper_broker
 from src.db.models import AgentHeartbeatRecord, PaperOrderRequest, PredictionSignal
 from src.db.queries import (
     fetch_recent_ohlcv,
@@ -49,7 +49,7 @@ logger = get_logger(__name__)
 class PortfolioManagerAgent:
     def __init__(self, agent_id: str = "portfolio_manager_agent") -> None:
         self.agent_id = agent_id
-        self.paper_broker = PaperBroker()
+        self.paper_broker = build_paper_broker()
 
     @staticmethod
     def _account_scope_from_config(cfg: dict) -> str:
@@ -138,7 +138,7 @@ class PortfolioManagerAgent:
             )
             if is_paper:
                 execution = await self.paper_broker.execute_order(order)
-                if execution.status != "FILLED":
+                if execution.status == "REJECTED":
                     logger.warning("페이퍼 주문 거절: %s (%s)", signal.ticker, execution.rejection_reason)
                     return None
             else:
@@ -180,10 +180,10 @@ class PortfolioManagerAgent:
             account_scope=account_scope,
         )
         if account_scope == "paper":
-                execution = await self.paper_broker.execute_order(order)
-                if execution.status != "FILLED":
-                    logger.warning("페이퍼 주문 거절: %s (%s)", signal.ticker, execution.rejection_reason)
-                    return None
+            execution = await self.paper_broker.execute_order(order)
+            if execution.status == "REJECTED":
+                logger.warning("페이퍼 주문 거절: %s (%s)", signal.ticker, execution.rejection_reason)
+                return None
         else:
             await save_position(
                 ticker=signal.ticker,

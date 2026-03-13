@@ -18,13 +18,13 @@ import logging
 import sys
 from pathlib import Path
 
-import httpx
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
+from src.services.kis_session import issue_kis_token, revoke_kis_token
 from src.utils.config import get_settings
 from src.utils.logging import setup_logging
 from src.utils.redis_client import (
@@ -46,38 +46,9 @@ async def issue_token() -> dict:
         logger.error("KIS_APP_KEY, KIS_APP_SECRET 환경변수가 설정되지 않았습니다.")
         sys.exit(1)
 
-    url = f"{settings.kis_base_url}/oauth2/tokenP"
-    payload = {
-        "grant_type": "client_credentials",
-        "appkey": settings.kis_app_key,
-        "appsecret": settings.kis_app_secret,
-    }
-
     mode = "페이퍼" if settings.kis_is_paper_trading else "실거래"
-    logger.info("KIS 토큰 발급 요청 [%s 모드]: %s", mode, url)
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-    if data.get("rt_cd") != "0":
-        logger.error("KIS 토큰 발급 실패: %s", data)
-        raise RuntimeError(f"KIS 토큰 발급 오류: {data.get('msg1', '알 수 없는 오류')}")
-
-    token_info = {
-        "access_token": data["access_token"],
-        "token_type": data.get("token_type", "Bearer"),
-        "expires_in": data.get("expires_in", 86400),
-        "issued_at": int(asyncio.get_event_loop().time()),
-        "is_paper": settings.kis_is_paper_trading,
-    }
-
-    # Redis에 저장 (TTL 23시간)
-    import json
-
-    redis = await get_redis()
-    await redis.set(KEY_KIS_OAUTH_TOKEN, json.dumps(token_info), ex=TTL_KIS_TOKEN)
+    logger.info("KIS 토큰 발급 요청 [%s 모드]: %s", mode, f"{settings.kis_base_url}/oauth2/tokenP")
+    token_info = await issue_kis_token(settings)
     logger.info(
         "✅ KIS 토큰 발급 완료 — Redis TTL: %d시간, 만료: %d초 후",
         TTL_KIS_TOKEN // 3600,
@@ -112,53 +83,13 @@ async def check_token() -> None:
 
 async def revoke_token() -> None:
     """발급된 KIS 토큰을 폐기하고 Redis에서 삭제합니다."""
-    import json
-
     redis = await get_redis()
     raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
-
     if not raw:
         logger.info("Redis에 저장된 토큰이 없습니다.")
         return
-
-    token_info = json.loads(raw)
-
-    url = f"{settings.kis_base_url}/oauth2/revokeP"
-    payload = {
-        "appkey": settings.kis_app_key,
-        "appsecret": settings.kis_app_secret,
-        "token": token_info["access_token"],
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-    except Exception as e:
-        logger.warning("KIS 토큰 폐기 API 오류 (계속 진행): %s", e)
-
-    await redis.delete(KEY_KIS_OAUTH_TOKEN)
+    await revoke_kis_token(settings)
     logger.info("✅ KIS 토큰이 폐기되었습니다.")
-
-
-async def get_stored_token() -> str | None:
-    """
-    Redis에서 저장된 KIS Access Token 문자열을 반환합니다.
-    에이전트 코드에서 직접 호출하는 헬퍼 함수입니다.
-
-    Returns:
-        Access Token 문자열, 없거나 만료되면 None
-    """
-    import json
-
-    redis = await get_redis()
-    raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
-
-    if not raw:
-        return None
-
-    token_info = json.loads(raw)
-    return token_info.get("access_token")
 
 
 async def main_async(args: argparse.Namespace) -> None:

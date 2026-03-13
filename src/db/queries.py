@@ -504,6 +504,26 @@ async def update_broker_order_status(
     )
 
 
+async def attach_broker_order_reference(
+    client_order_id: str,
+    *,
+    broker_name: str | None = None,
+    broker_order_id: str | None = None,
+) -> None:
+    await execute(
+        """
+        UPDATE broker_orders
+        SET broker_name = COALESCE($2, broker_name),
+            broker_order_id = COALESCE($3, broker_order_id),
+            updated_at = NOW()
+        WHERE client_order_id = $1
+        """,
+        client_order_id,
+        broker_name,
+        broker_order_id,
+    )
+
+
 async def list_broker_orders(account_scope: AccountScope = "paper", limit: int = 50) -> list[dict]:
     scope = normalize_account_scope(account_scope)
     rows = await fetch(
