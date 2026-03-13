@@ -6,6 +6,7 @@ import RequireAuth from "@/components/RequireAuth";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Strategy = lazy(() => import("@/pages/Strategy"));
+const Models = lazy(() => import("@/pages/Models"));
 const Portfolio = lazy(() => import("@/pages/Portfolio"));
 const Market = lazy(() => import("@/pages/Market"));
 const LongTerm = lazy(() => import("@/pages/LongTerm"));
@@ -41,6 +42,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={withSuspense(<Dashboard />)} />
           <Route path="/strategy" element={withSuspense(<Strategy />)} />
+          <Route path="/models" element={withSuspense(<Models />)} />
           <Route path="/portfolio" element={withSuspense(<Portfolio />)} />
           <Route path="/market" element={withSuspense(<Market />)} />
           <Route path="/long-term" element={withSuspense(<LongTerm />)} />

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import Layout from "@/components/Layout";
 
 describe("Layout navigation", () => {
-  it("renders long-term and paper trading navigation items", () => {
+  it("renders model management, long-term, and paper trading navigation items", () => {
     render(
       <MemoryRouter initialEntries={["/dashboard"]}>
         <Routes>
@@ -16,6 +16,7 @@ describe("Layout navigation", () => {
       </MemoryRouter>
     );
 
+    expect(screen.getAllByText("모델 관리").length).toBeGreaterThan(0);
     expect(screen.getAllByText("모의 투자").length).toBeGreaterThan(0);
     expect(screen.getAllByText("장기투자").length).toBeGreaterThan(0);
   });

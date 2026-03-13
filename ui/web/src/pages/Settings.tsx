@@ -17,7 +17,8 @@ import {
   type NotificationPreferences,
 } from "@/hooks/useNotifications";
 
-type ConfigForm = Omit<PortfolioConfig, "is_paper_trading">;
+type ConfigForm = Pick<PortfolioConfig, "strategy_blend_ratio" | "max_position_pct" | "daily_loss_limit_pct">;
+type ExecutionForm = Pick<PortfolioConfig, "enable_paper_trading" | "enable_real_trading" | "primary_account_scope">;
 
 export default function Settings() {
   const { data: config, isLoading: configLoading } = usePortfolioConfig();
@@ -32,6 +33,11 @@ export default function Settings() {
     strategy_blend_ratio: 0.5,
     max_position_pct: 20,
     daily_loss_limit_pct: 3,
+  });
+  const [executionForm, setExecutionForm] = useState<ExecutionForm>({
+    enable_paper_trading: true,
+    enable_real_trading: false,
+    primary_account_scope: "paper",
   });
   const [notifForm, setNotifForm] = useState<NotificationPreferences>({
     morning_brief: true,
@@ -48,6 +54,11 @@ export default function Settings() {
       strategy_blend_ratio: Number(config.strategy_blend_ratio ?? 0.5),
       max_position_pct: Number(config.max_position_pct ?? 20),
       daily_loss_limit_pct: Number(config.daily_loss_limit_pct ?? 3),
+    });
+    setExecutionForm({
+      enable_paper_trading: Boolean(config.enable_paper_trading ?? true),
+      enable_real_trading: Boolean(config.enable_real_trading ?? false),
+      primary_account_scope: config.primary_account_scope ?? "paper",
     });
   }, [config]);
 
@@ -73,16 +84,13 @@ export default function Settings() {
       <section className="card space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>전략/리스크 설정</h2>
-          {config?.is_paper_trading ? (
-            <span className="chip">PAPER</span>
-          ) : (
-            <span
-              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
-              style={{ background: "var(--loss-bg)", color: "var(--loss)" }}
-            >
-              REAL
-            </span>
-          )}
+          <span className="chip">
+            {config?.enable_paper_trading && config?.enable_real_trading
+              ? `PAPER + REAL (${config.primary_account_scope.toUpperCase()} primary)`
+              : config?.enable_real_trading
+                ? "REAL"
+                : "PAPER"}
+          </span>
         </div>
 
         <div className="rounded-xl px-4 py-4" style={{ background: "var(--bg-elevated)", border: "1px solid var(--line-soft)" }}>
@@ -167,10 +175,12 @@ export default function Settings() {
         </button>
       </section>
 
-      {/* Live Trading Conversion */}
+      {/* Execution Config */}
       <section className="card space-y-4">
-        <h2 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>실거래 전환</h2>
-        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>전환 시 confirmation code와 readiness 통과가 모두 필요합니다.</p>
+        <h2 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>실행 계좌 관리</h2>
+        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+          paper와 real을 동시에 운용할 수 있습니다. real 활성화에는 confirmation code와 readiness 통과가 필요합니다.
+        </p>
 
         {readinessLoading ? (
           <div className="h-24 skeleton" />
@@ -193,6 +203,58 @@ export default function Settings() {
           </div>
         )}
 
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label
+            className="flex items-center justify-between rounded-xl px-4 py-3"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--line-soft)" }}
+          >
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>모의투자 실행</p>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>internal 또는 KIS paper backend로 주문을 계속 실행합니다.</p>
+            </div>
+            <input
+              type="checkbox"
+              checked={executionForm.enable_paper_trading}
+              onChange={(e) => setExecutionForm((prev) => ({ ...prev, enable_paper_trading: e.target.checked }))}
+              className="h-5 w-5 rounded accent-[#3182F6]"
+            />
+          </label>
+          <label
+            className="flex items-center justify-between rounded-xl px-4 py-3"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--line-soft)" }}
+          >
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>실거래 실행</p>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>KIS 실거래 주문을 함께 실행합니다. readiness 통과와 확인 코드가 필요합니다.</p>
+            </div>
+            <input
+              type="checkbox"
+              checked={executionForm.enable_real_trading}
+              onChange={(e) => setExecutionForm((prev) => ({ ...prev, enable_real_trading: e.target.checked }))}
+              className="h-5 w-5 rounded accent-[#EF4444]"
+            />
+          </label>
+        </div>
+
+        <div className="rounded-xl px-4 py-3" style={{ background: "var(--bg-elevated)", border: "1px solid var(--line-soft)" }}>
+          <label className="mb-1 block text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Primary View Scope</label>
+          <p className="mb-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+            `current` 모드와 기본 대시보드에서 우선 보여줄 계좌를 선택합니다.
+          </p>
+          <select
+            value={executionForm.primary_account_scope}
+            onChange={(e) =>
+              setExecutionForm((prev) => ({
+                ...prev,
+                primary_account_scope: e.target.value as ExecutionForm["primary_account_scope"],
+              }))
+            }
+          >
+            <option value="paper">paper</option>
+            <option value="real">real</option>
+          </select>
+        </div>
+
         <div className="rounded-xl px-4 py-3" style={{ background: "var(--bg-elevated)", border: "1px solid var(--line-soft)" }}>
           <label className="mb-1 block text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Confirmation Code</label>
           <input
@@ -206,28 +268,18 @@ export default function Settings() {
         <div className="flex flex-wrap gap-2">
           <button
             className="inline-flex items-center justify-center rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all disabled:opacity-50"
-            style={{ background: "var(--loss)" }}
+            style={{ background: executionForm.enable_real_trading ? "var(--loss)" : "var(--brand-500)" }}
             disabled={modeMutation.isPending}
             onClick={() =>
               modeMutation.mutate({
-                is_paper: false,
+                enable_paper_trading: executionForm.enable_paper_trading,
+                enable_real_trading: executionForm.enable_real_trading,
+                primary_account_scope: executionForm.primary_account_scope,
                 confirmation_code: confirmationCode,
               })
             }
           >
-            실거래 전환
-          </button>
-          <button
-            className="btn-secondary disabled:opacity-50"
-            disabled={modeMutation.isPending}
-            onClick={() =>
-              modeMutation.mutate({
-                is_paper: true,
-                confirmation_code: confirmationCode,
-              })
-            }
-          >
-            페이퍼 복귀
+            {modeMutation.isPending ? "저장 중..." : "실행 계좌 저장"}
           </button>
         </div>
       </section>

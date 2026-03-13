@@ -140,7 +140,61 @@ CREATE_TABLES: list[str] = [
         ON debate_transcripts (trading_date DESC, ticker);
     """,
 
-    # 6. 포트폴리오 설정
+    # 6. 모델/페르소나 역할 설정
+    """
+    CREATE TABLE IF NOT EXISTS model_role_configs (
+        id              BIGSERIAL PRIMARY KEY,
+        config_key      VARCHAR(60) NOT NULL UNIQUE,
+        strategy_code   CHAR(1) NOT NULL CHECK (strategy_code IN ('A', 'B')),
+        role            VARCHAR(30) NOT NULL,
+        role_label      TEXT NOT NULL,
+        agent_id        VARCHAR(50) NOT NULL,
+        llm_model       VARCHAR(80) NOT NULL,
+        persona         TEXT NOT NULL,
+        execution_order INTEGER NOT NULL DEFAULT 1 CHECK (execution_order >= 1),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS config_key VARCHAR(60);
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS strategy_code CHAR(1);
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS role VARCHAR(30);
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS role_label TEXT;
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS agent_id VARCHAR(50);
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS llm_model VARCHAR(80);
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS persona TEXT;
+    ALTER TABLE model_role_configs
+        ADD COLUMN IF NOT EXISTS execution_order INTEGER DEFAULT 1;
+    ALTER TABLE model_role_configs
+        DROP CONSTRAINT IF EXISTS model_role_configs_strategy_code_check;
+    ALTER TABLE model_role_configs
+        ADD CONSTRAINT model_role_configs_strategy_code_check
+        CHECK (strategy_code IN ('A', 'B'));
+    CREATE INDEX IF NOT EXISTS idx_model_role_configs_strategy_order
+        ON model_role_configs (strategy_code, execution_order, updated_at DESC);
+    INSERT INTO model_role_configs (
+        config_key, strategy_code, role, role_label, agent_id,
+        llm_model, persona, execution_order
+    ) VALUES
+        ('strategy_a_predictor_1', 'A', 'predictor', 'Predictor 1', 'predictor_1', 'claude-3-5-sonnet-latest', '가치 투자형', 1),
+        ('strategy_a_predictor_2', 'A', 'predictor', 'Predictor 2', 'predictor_2', 'claude-3-5-sonnet-latest', '기술적 분석형', 2),
+        ('strategy_a_predictor_3', 'A', 'predictor', 'Predictor 3', 'predictor_3', 'gpt-4o-mini', '모멘텀형', 3),
+        ('strategy_a_predictor_4', 'A', 'predictor', 'Predictor 4', 'predictor_4', 'gpt-4o-mini', '역추세형', 4),
+        ('strategy_a_predictor_5', 'A', 'predictor', 'Predictor 5', 'predictor_5', 'gemini-1.5-pro', '거시경제형', 5),
+        ('strategy_b_proposer', 'B', 'proposer', 'Proposer', 'consensus_proposer', 'claude-3-5-sonnet-latest', '핵심 매매 가설을 세우는 수석 분석가', 1),
+        ('strategy_b_challenger_1', 'B', 'challenger', 'Challenger 1', 'consensus_challenger_1', 'gpt-4o-mini', '가설의 약점을 빠르게 파고드는 반론가', 2),
+        ('strategy_b_challenger_2', 'B', 'challenger', 'Challenger 2', 'consensus_challenger_2', 'gemini-1.5-pro', '거시 변수와 대안을 점검하는 반론가', 3),
+        ('strategy_b_synthesizer', 'B', 'synthesizer', 'Synthesizer', 'consensus_synthesizer', 'claude-3-5-sonnet-latest', '토론을 종합해 최종 결론을 내리는 조정자', 4)
+    ON CONFLICT (config_key) DO NOTHING;
+    """,
+
+    # 7. 포트폴리오 설정
     """
     CREATE TABLE IF NOT EXISTS portfolio_config (
         id                      SERIAL PRIMARY KEY,
@@ -151,16 +205,52 @@ CREATE_TABLES: list[str] = [
         daily_loss_limit_pct    INTEGER NOT NULL DEFAULT 3
                                     CHECK (daily_loss_limit_pct BETWEEN 1 AND 100),
         is_paper_trading        BOOLEAN NOT NULL DEFAULT TRUE,
+        enable_paper_trading    BOOLEAN NOT NULL DEFAULT TRUE,
+        enable_real_trading     BOOLEAN NOT NULL DEFAULT FALSE,
+        primary_account_scope   VARCHAR(10) NOT NULL DEFAULT 'paper',
         updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE portfolio_config
+        ADD COLUMN IF NOT EXISTS enable_paper_trading BOOLEAN;
+    ALTER TABLE portfolio_config
+        ADD COLUMN IF NOT EXISTS enable_real_trading BOOLEAN;
+    ALTER TABLE portfolio_config
+        ADD COLUMN IF NOT EXISTS primary_account_scope VARCHAR(10);
+    UPDATE portfolio_config
+       SET enable_paper_trading = COALESCE(enable_paper_trading, is_paper_trading, TRUE),
+           enable_real_trading = COALESCE(enable_real_trading, NOT COALESCE(is_paper_trading, TRUE)),
+           primary_account_scope = COALESCE(
+               primary_account_scope,
+               CASE WHEN COALESCE(is_paper_trading, TRUE) THEN 'paper' ELSE 'real' END
+           );
+    ALTER TABLE portfolio_config
+        ALTER COLUMN enable_paper_trading SET DEFAULT TRUE;
+    ALTER TABLE portfolio_config
+        ALTER COLUMN enable_real_trading SET DEFAULT FALSE;
+    ALTER TABLE portfolio_config
+        ALTER COLUMN primary_account_scope SET DEFAULT 'paper';
+    ALTER TABLE portfolio_config
+        ALTER COLUMN enable_paper_trading SET NOT NULL;
+    ALTER TABLE portfolio_config
+        ALTER COLUMN enable_real_trading SET NOT NULL;
+    ALTER TABLE portfolio_config
+        ALTER COLUMN primary_account_scope SET NOT NULL;
+    ALTER TABLE portfolio_config
+        DROP CONSTRAINT IF EXISTS portfolio_config_primary_account_scope_check;
+    ALTER TABLE portfolio_config
+        ADD CONSTRAINT portfolio_config_primary_account_scope_check
+        CHECK (primary_account_scope IN ('paper', 'real'));
     -- 단일 행 보장용 초기값 삽입 (이미 있으면 무시)
     INSERT INTO portfolio_config
-        (strategy_blend_ratio, max_position_pct, daily_loss_limit_pct, is_paper_trading)
-    VALUES (0.50, 20, 3, TRUE)
+        (
+            strategy_blend_ratio, max_position_pct, daily_loss_limit_pct,
+            is_paper_trading, enable_paper_trading, enable_real_trading, primary_account_scope
+        )
+    VALUES (0.50, 20, 3, TRUE, TRUE, FALSE, 'paper')
     ON CONFLICT DO NOTHING;
     """,
 
-    # 7. 계좌 상태 (paper/real 공통 메타데이터)
+    # 8. 계좌 상태 (paper/real 공통 메타데이터)
     """
     CREATE TABLE IF NOT EXISTS trading_accounts (
         account_scope   VARCHAR(10) PRIMARY KEY,
@@ -191,7 +281,7 @@ CREATE_TABLES: list[str] = [
     ON CONFLICT (account_scope) DO NOTHING;
     """,
 
-    # 8. 포트폴리오 포지션 (현재 보유)
+    # 9. 포트폴리오 포지션 (현재 보유)
     """
     CREATE TABLE IF NOT EXISTS portfolio_positions (
         id              BIGSERIAL PRIMARY KEY,
@@ -390,12 +480,45 @@ CREATE_TABLES: list[str] = [
         requested_by_email      TEXT,
         requested_by_user_id    TEXT,
         requested_mode_is_paper BOOLEAN NOT NULL,
+        requested_paper_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        requested_real_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+        requested_primary_account_scope VARCHAR(10) NOT NULL DEFAULT 'paper',
         confirmation_code_ok    BOOLEAN NOT NULL,
         readiness_passed        BOOLEAN NOT NULL,
         readiness_summary       JSONB,
         applied                 BOOLEAN NOT NULL DEFAULT FALSE,
         message                 TEXT
     );
+    ALTER TABLE real_trading_audit
+        ADD COLUMN IF NOT EXISTS requested_paper_enabled BOOLEAN;
+    ALTER TABLE real_trading_audit
+        ADD COLUMN IF NOT EXISTS requested_real_enabled BOOLEAN;
+    ALTER TABLE real_trading_audit
+        ADD COLUMN IF NOT EXISTS requested_primary_account_scope VARCHAR(10);
+    UPDATE real_trading_audit
+       SET requested_paper_enabled = COALESCE(requested_paper_enabled, requested_mode_is_paper),
+           requested_real_enabled = COALESCE(requested_real_enabled, NOT requested_mode_is_paper),
+           requested_primary_account_scope = COALESCE(
+               requested_primary_account_scope,
+               CASE WHEN requested_mode_is_paper THEN 'paper' ELSE 'real' END
+           );
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_paper_enabled SET DEFAULT TRUE;
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_real_enabled SET DEFAULT FALSE;
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_primary_account_scope SET DEFAULT 'paper';
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_paper_enabled SET NOT NULL;
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_real_enabled SET NOT NULL;
+    ALTER TABLE real_trading_audit
+        ALTER COLUMN requested_primary_account_scope SET NOT NULL;
+    ALTER TABLE real_trading_audit
+        DROP CONSTRAINT IF EXISTS real_trading_audit_primary_scope_check;
+    ALTER TABLE real_trading_audit
+        ADD CONSTRAINT real_trading_audit_primary_scope_check
+        CHECK (requested_primary_account_scope IN ('paper', 'real'));
     CREATE INDEX IF NOT EXISTS idx_real_trading_audit_ts
         ON real_trading_audit (requested_at DESC);
     """,
@@ -415,7 +538,7 @@ CREATE_TABLES: list[str] = [
         DROP CONSTRAINT IF EXISTS operational_audits_audit_type_check;
     ALTER TABLE operational_audits
         ADD CONSTRAINT operational_audits_audit_type_check
-        CHECK (audit_type IN ('security', 'risk_rules', 'paper_reconciliation'));
+        CHECK (audit_type IN ('security', 'risk_rules', 'paper_reconciliation', 'real_reconciliation'));
     CREATE INDEX IF NOT EXISTS idx_operational_audits_type_ts
         ON operational_audits (audit_type, created_at DESC);
     """,

@@ -7,6 +7,7 @@ from src.llm.gpt_client import GPTClient
 
 class GPTClientCircuitBreakerTest(unittest.IsolatedAsyncioTestCase):
     def _build_client(self, side_effect: Exception) -> tuple[GPTClient, AsyncMock]:
+        GPTClient._global_quota_exhausted = False
         create_mock = AsyncMock(side_effect=side_effect)
         client = GPTClient.__new__(GPTClient)
         client.model = "gpt-4o-mini"

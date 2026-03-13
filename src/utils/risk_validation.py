@@ -39,19 +39,20 @@ async def validate_max_position_limit() -> dict[str, Any]:
             new=AsyncMock(return_value={"quantity": 5, "current_price": 1_000, "avg_price": 1_000}),
         ),
         patch("src.agents.portfolio_manager.portfolio_total_value", new=AsyncMock(return_value=6_000)),
-        patch("src.agents.portfolio_manager.save_position", new=AsyncMock()) as save_mock,
-        patch("src.agents.portfolio_manager.insert_trade", new=AsyncMock()) as trade_mock,
+        patch.object(agent.paper_broker, "execute_order", new=AsyncMock()) as execute_order_mock,
     ):
         result = await agent.process_signal(
             signal,
             risk_config={
                 "max_position_pct": 50,
-                "is_paper_trading": True,
+                "enable_paper_trading": True,
+                "enable_real_trading": False,
+                "primary_account_scope": "paper",
                 "paper_seed_capital": 10_000,
             },
         )
 
-    ok = result is None and save_mock.await_count == 0 and trade_mock.await_count == 0
+    ok = result is None and execute_order_mock.await_count == 0
     return {
         "key": "risk:max_position_limit",
         "ok": ok,
@@ -66,15 +67,20 @@ async def validate_daily_loss_circuit_breaker() -> dict[str, Any]:
     with (
         patch(
             "src.agents.portfolio_manager.get_portfolio_config",
-            new=AsyncMock(return_value={"daily_loss_limit_pct": 3, "max_position_pct": 20}),
-        ),
-        patch(
-            "src.agents.portfolio_manager.today_trade_totals",
-            new=AsyncMock(return_value={"buy_total": 10_000, "sell_total": 9_200}),
+            new=AsyncMock(
+                return_value={
+                    "daily_loss_limit_pct": 3,
+                    "max_position_pct": 20,
+                    "enable_paper_trading": True,
+                    "enable_real_trading": False,
+                    "primary_account_scope": "paper",
+                }
+            ),
         ),
         patch("src.agents.portfolio_manager.publish_message", new=AsyncMock()) as publish_mock,
         patch("src.agents.portfolio_manager.set_heartbeat", new=AsyncMock()) as heartbeat_mock,
         patch("src.agents.portfolio_manager.insert_heartbeat", new=AsyncMock()) as insert_hb_mock,
+        patch.object(agent, "_is_daily_loss_blocked", new=AsyncMock(return_value=(True, -3.5))),
         patch.object(agent, "process_signal", new=AsyncMock()) as process_signal_mock,
     ):
         orders = await agent.process_predictions([signal])
@@ -82,7 +88,7 @@ async def validate_daily_loss_circuit_breaker() -> dict[str, Any]:
     ok = (
         orders == []
         and process_signal_mock.await_count == 0
-        and publish_mock.await_count == 1
+        and publish_mock.await_count >= 1
         and heartbeat_mock.await_count == 1
         and insert_hb_mock.await_count == 1
     )
@@ -101,15 +107,20 @@ async def validate_daily_loss_allows_when_within_limit() -> dict[str, Any]:
     with (
         patch(
             "src.agents.portfolio_manager.get_portfolio_config",
-            new=AsyncMock(return_value={"daily_loss_limit_pct": 3, "max_position_pct": 20}),
-        ),
-        patch(
-            "src.agents.portfolio_manager.today_trade_totals",
-            new=AsyncMock(return_value={"buy_total": 10_000, "sell_total": 9_800}),
+            new=AsyncMock(
+                return_value={
+                    "daily_loss_limit_pct": 3,
+                    "max_position_pct": 20,
+                    "enable_paper_trading": True,
+                    "enable_real_trading": False,
+                    "primary_account_scope": "paper",
+                }
+            ),
         ),
         patch("src.agents.portfolio_manager.publish_message", new=AsyncMock()) as publish_mock,
         patch("src.agents.portfolio_manager.set_heartbeat", new=AsyncMock()) as heartbeat_mock,
         patch("src.agents.portfolio_manager.insert_heartbeat", new=AsyncMock()) as insert_hb_mock,
+        patch.object(agent, "_is_daily_loss_blocked", new=AsyncMock(return_value=(False, -1.5))),
         patch.object(agent, "process_signal", new=AsyncMock(return_value=expected_order)) as process_signal_mock,
     ):
         orders = await agent.process_predictions([signal])

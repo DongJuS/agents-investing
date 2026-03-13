@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from src.brokers.kis import KISAPIError, KISPaperApiClient
+from src.brokers.kis import KISAPIError, KISApiClient, KISPaperApiClient, KISRealApiClient
 from src.db.queries import (
     get_trading_account,
     insert_operational_audit,
@@ -79,18 +79,42 @@ async def _with_retries(factory, *, attempts: int = 3):
     raise last_error
 
 
-async def reconcile_kis_paper_account(
+def _backend_for_scope(scope: str, settings) -> str:
+    if scope == "real":
+        return str(getattr(settings, "real_broker_backend", "kis")).strip().lower()
+    return str(getattr(settings, "paper_broker_backend", "internal")).strip().lower()
+
+
+def _account_label_for_scope(scope: str) -> str:
+    return "KIS 모의투자 계좌" if scope == "paper" else "KIS 실거래 계좌"
+
+
+def _audit_type_for_scope(scope: str) -> str:
+    return "paper_reconciliation" if scope == "paper" else "real_reconciliation"
+
+
+def _default_client_for_scope(scope: str, settings) -> KISApiClient:
+    if scope == "real":
+        return KISRealApiClient(settings=settings)
+    return KISPaperApiClient(settings=settings)
+
+
+async def reconcile_kis_account(
     *,
+    account_scope: str = "paper",
     report_date: date | None = None,
-    client: KISPaperApiClient | None = None,
+    client: KISApiClient | None = None,
     record_audit: bool = True,
     max_retries: int = 3,
 ) -> dict:
     settings = get_settings()
-    backend = settings.paper_broker_backend.strip().lower()
+    scope = "real" if account_scope == "real" else "paper"
+    backend = _backend_for_scope(scope, settings)
     target_date = report_date or date.today()
+    audit_type = _audit_type_for_scope(scope)
 
     result = {
+        "account_scope": scope,
         "report_date": target_date.isoformat(),
         "backend": backend,
         "passed": False,
@@ -105,10 +129,14 @@ async def reconcile_kis_paper_account(
     if backend not in {"kis", "kis_shadow"} and client is None:
         result["fallback_used"] = True
         result["passed"] = True
-        result["summary"] = "PAPER_BROKER_BACKEND=internal 이므로 internal read model을 유지했습니다."
+        result["summary"] = (
+            "PAPER_BROKER_BACKEND=internal 이므로 internal read model을 유지했습니다."
+            if scope == "paper"
+            else "REAL_BROKER_BACKEND가 live가 아니므로 기존 read model을 유지했습니다."
+        )
         if record_audit:
             await insert_operational_audit(
-                audit_type="paper_reconciliation",
+                audit_type=audit_type,
                 passed=True,
                 summary=result["summary"],
                 details=result,
@@ -116,15 +144,19 @@ async def reconcile_kis_paper_account(
             )
         return result
 
-    active_client = client or KISPaperApiClient(settings=settings)
+    active_client = client or _default_client_for_scope(scope, settings)
 
     if not active_client.is_configured():
         result["fallback_used"] = True
         result["passed"] = backend != "kis"
-        result["summary"] = "KIS 설정이 없어 internal read model을 유지했습니다."
+        result["summary"] = (
+            "KIS 설정이 없어 internal read model을 유지했습니다."
+            if scope == "paper"
+            else "KIS real 설정이 없어 기존 read model을 유지했습니다."
+        )
         if record_audit:
             await insert_operational_audit(
-                audit_type="paper_reconciliation",
+                audit_type=audit_type,
                 passed=result["passed"],
                 summary=result["summary"],
                 details=result,
@@ -141,10 +173,10 @@ async def reconcile_kis_paper_account(
     except KISAPIError as exc:
         result["fallback_used"] = True
         result["passed"] = backend != "kis"
-        result["summary"] = f"KIS reconciliation 실패: {exc}"
+        result["summary"] = f"KIS {scope} reconciliation 실패: {exc}"
         if record_audit:
             await insert_operational_audit(
-                audit_type="paper_reconciliation",
+                audit_type=audit_type,
                 passed=result["passed"],
                 summary=result["summary"],
                 details=result,
@@ -152,8 +184,8 @@ async def reconcile_kis_paper_account(
             )
         return result
 
-    existing_account = await get_trading_account("paper")
-    existing_positions = await list_positions("paper")
+    existing_account = await get_trading_account(scope)
+    existing_positions = await list_positions(scope)
     remote_positions = balance_payload["positions"]
     remote_tickers: set[str] = set()
 
@@ -170,8 +202,8 @@ async def reconcile_kis_paper_account(
             quantity=quantity,
             avg_price=_to_int(item.get("pchs_avg_pric")),
             current_price=_to_int(item.get("prpr")),
-            is_paper=True,
-            account_scope="paper",
+            is_paper=scope == "paper",
+            account_scope=scope,
         )
         result["position_updates"] += 1
 
@@ -184,8 +216,8 @@ async def reconcile_kis_paper_account(
             quantity=0,
             avg_price=0,
             current_price=_to_int(local.get("current_price")),
-            is_paper=True,
-            account_scope="paper",
+            is_paper=scope == "paper",
+            account_scope=scope,
         )
         result["positions_cleared"] += 1
 
@@ -198,9 +230,9 @@ async def reconcile_kis_paper_account(
     seed_capital = int(existing_account["seed_capital"]) if existing_account else max(total_equity - total_pnl, total_equity)
 
     await upsert_trading_account(
-        account_scope="paper",
+        account_scope=scope,
         broker_name="한국투자증권 KIS",
-        account_label="KIS 모의투자 계좌",
+        account_label=_account_label_for_scope(scope),
         seed_capital=seed_capital,
         cash_balance=cash_balance,
         buying_power=buying_power,
@@ -208,7 +240,7 @@ async def reconcile_kis_paper_account(
         is_active=True,
     )
     await record_account_snapshot(
-        account_scope="paper",
+        account_scope=scope,
         cash_balance=cash_balance,
         buying_power=buying_power,
         position_market_value=position_market_value,
@@ -236,10 +268,10 @@ async def reconcile_kis_paper_account(
         name = str(row.get("prdt_name") or ticker)
 
         await upsert_kis_broker_order(
-            account_scope="paper",
-            broker_order_id=broker_order_id,
-            ticker=ticker,
-            name=name,
+        account_scope=scope,
+        broker_order_id=broker_order_id,
+        ticker=ticker,
+        name=name,
             side=side,
             requested_quantity=requested_quantity,
             requested_price=requested_price,
@@ -255,14 +287,14 @@ async def reconcile_kis_paper_account(
             continue
 
         inserted = await upsert_trade_fill(
-            account_scope="paper",
+            account_scope=scope,
             ticker=ticker,
             name=name,
             side=side,
             quantity=filled_quantity,
             price=average_fill_price or requested_price,
             signal_source="BLEND",
-            agent_id="kis_reconciler",
+            agent_id=f"kis_{scope}_reconciler",
             kis_order_id=broker_order_id,
             executed_at=filled_at,
         )
@@ -271,15 +303,47 @@ async def reconcile_kis_paper_account(
 
     result["passed"] = True
     result["summary"] = (
-        f"KIS paper reconciliation 완료: positions={result['position_updates']}, "
+        f"KIS {scope} reconciliation 완료: positions={result['position_updates']}, "
         f"orders={result['orders_synced']}, new_trades={result['new_trades']}"
     )
     if record_audit:
         await insert_operational_audit(
-            audit_type="paper_reconciliation",
+            audit_type=audit_type,
             passed=True,
             summary=result["summary"],
             details=result,
             executed_by="services.paper_reconciliation",
         )
     return result
+
+
+async def reconcile_kis_paper_account(
+    *,
+    report_date: date | None = None,
+    client: KISApiClient | None = None,
+    record_audit: bool = True,
+    max_retries: int = 3,
+) -> dict:
+    return await reconcile_kis_account(
+        account_scope="paper",
+        report_date=report_date,
+        client=client,
+        record_audit=record_audit,
+        max_retries=max_retries,
+    )
+
+
+async def reconcile_kis_real_account(
+    *,
+    report_date: date | None = None,
+    client: KISApiClient | None = None,
+    record_audit: bool = True,
+    max_retries: int = 3,
+) -> dict:
+    return await reconcile_kis_account(
+        account_scope="real",
+        report_date=report_date,
+        client=client,
+        record_audit=record_audit,
+        max_retries=max_retries,
+    )

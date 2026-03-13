@@ -1,5 +1,5 @@
 """
-scripts/run_paper_reconciliation.py — KIS paper 계좌 reconciliation 실행기
+scripts/run_paper_reconciliation.py — KIS 계좌 reconciliation 실행기
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from src.agents.notifier import NotifierAgent
-from src.services.paper_reconciliation import reconcile_kis_paper_account
+from src.services.paper_reconciliation import reconcile_kis_account
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -29,7 +29,11 @@ def _parse_date(value: str | None) -> date | None:
 
 async def _main(args: argparse.Namespace) -> int:
     report_date = _parse_date(args.report_date)
-    result = await reconcile_kis_paper_account(report_date=report_date, record_audit=not args.no_audit)
+    result = await reconcile_kis_account(
+        account_scope=args.scope,
+        report_date=report_date,
+        record_audit=not args.no_audit,
+    )
 
     if args.send_report:
         notifier = NotifierAgent()
@@ -40,7 +44,8 @@ async def _main(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="KIS paper reconciliation 실행")
+    parser = argparse.ArgumentParser(description="KIS 계좌 reconciliation 실행")
+    parser.add_argument("--scope", choices=["paper", "real"], default="paper", help="동기화할 계좌 scope")
     parser.add_argument("--report-date", default=None, help="YYYY-MM-DD")
     parser.add_argument("--send-report", action="store_true", help="일일 리포트 전송")
     parser.add_argument("--no-audit", action="store_true", help="operational_audits 기록 생략")

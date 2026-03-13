@@ -30,12 +30,12 @@ from src.db.queries import insert_heartbeat, upsert_market_data
 from src.utils.config import get_settings
 from src.utils.logging import get_logger, setup_logging
 from src.utils.redis_client import (
-    KEY_KIS_OAUTH_TOKEN,
     KEY_LATEST_TICKS,
     KEY_REALTIME_SERIES,
     TOPIC_MARKET_DATA,
     TTL_REALTIME_SERIES,
     get_redis,
+    kis_oauth_token_key,
     publish_message,
     set_heartbeat,
 )
@@ -161,7 +161,8 @@ class CollectorAgent:
 
     async def _get_access_token(self) -> Optional[str]:
         redis = await get_redis()
-        raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
+        scope = "paper" if self.settings.kis_is_paper_trading else "real"
+        raw = await redis.get(kis_oauth_token_key(scope))
         if not raw:
             return None
         try:

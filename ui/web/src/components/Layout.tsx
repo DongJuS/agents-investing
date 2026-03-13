@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 const NAV_ITEMS = [
   { to: "/dashboard", label: "홈", description: "자산 현황" },
   { to: "/strategy", label: "전략", description: "A/B 교차검증" },
+  { to: "/models", label: "모델 관리", description: "페르소나와 역할" },
   { to: "/market", label: "마켓", description: "실시간 데이터" },
   { to: "/long-term", label: "장기투자", description: "준비 중인 화면" },
   { to: "/paper-trading", label: "모의 투자", description: "KIS 페이퍼 계좌" },

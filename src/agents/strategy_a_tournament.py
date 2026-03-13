@@ -23,6 +23,7 @@ load_dotenv(ROOT / ".env")
 
 from src.agents.predictor import PredictorAgent
 from src.db.queries import upsert_tournament_score
+from src.services.model_config import get_strategy_a_profiles
 from src.utils.config import get_settings
 from src.utils.db_client import execute, fetch, fetchrow
 from src.utils.logging import get_logger, setup_logging
@@ -65,7 +66,21 @@ class StrategyATournament:
             int(min_samples if min_samples is not None else default_min_samples),
         )
 
+    async def _profiles(self) -> list[PredictorProfile]:
+        rows = await get_strategy_a_profiles()
+        profiles = [
+            PredictorProfile(
+                agent_id=str(row["agent_id"]),
+                model=str(row["llm_model"]),
+                persona=str(row["persona"]),
+            )
+            for row in rows
+        ]
+        return profiles or PROFILES
+
     async def run_predictors(self, tickers: list[str]) -> dict[str, int]:
+        profiles = await self._profiles()
+
         async def _run(profile: PredictorProfile) -> tuple[str, int]:
             agent = PredictorAgent(
                 agent_id=profile.agent_id,
@@ -76,7 +91,7 @@ class StrategyATournament:
             predictions = await agent.run_once(tickers=tickers, limit=len(tickers))
             return profile.agent_id, len(predictions)
 
-        results = await asyncio.gather(*[_run(p) for p in PROFILES])
+        results = await asyncio.gather(*[_run(p) for p in profiles])
         return {agent_id: count for agent_id, count in results}
 
     async def backfill_outcomes(self, target_date: date) -> int:
@@ -181,8 +196,9 @@ class StrategyATournament:
         )
 
         winner = self._select_winner(rows, min_samples=required_samples)
+        profiles = await self._profiles()
 
-        for profile in PROFILES:
+        for profile in profiles:
             score_row = next((r for r in rows if r["agent_id"] == profile.agent_id), None)
             correct = int(score_row["correct"]) if score_row else 0
             total = int(score_row["total"]) if score_row else 0

@@ -52,40 +52,6 @@ class PredictorAgent:
         self.gpt = GPTClient(model=llm_model if "gpt" in llm_model.lower() else "gpt-4o-mini")
         self.gemini = GeminiClient(model=llm_model if "gemini" in llm_model.lower() else "gemini-1.5-pro")
 
-    @staticmethod
-    def _rule_based_signal(candles: list[dict]) -> dict[str, Any]:
-        if not candles:
-            return {
-                "signal": "HOLD",
-                "confidence": 0.50,
-                "reasoning_summary": "가격 이력 부족으로 HOLD",
-                "target_price": None,
-                "stop_loss": None,
-            }
-
-        closes = [int(c["close"]) for c in candles]
-        latest = closes[0]
-        short = sum(closes[:5]) / min(len(closes), 5)
-        long = sum(closes[:20]) / min(len(closes), 20)
-
-        if short > long * 1.01:
-            signal = "BUY"
-            confidence = 0.63
-        elif short < long * 0.99:
-            signal = "SELL"
-            confidence = 0.61
-        else:
-            signal = "HOLD"
-            confidence = 0.55
-
-        return {
-            "signal": signal,
-            "confidence": confidence,
-            "reasoning_summary": f"단기/장기 평균 비교 기반 규칙 신호 (short={short:.1f}, long={long:.1f})",
-            "target_price": int(latest * 1.02) if signal == "BUY" else None,
-            "stop_loss": int(latest * 0.97) if signal == "BUY" else None,
-        }
-
     def _provider_name(self) -> str:
         model = self.llm_model.lower()
         if "gpt" in model:
@@ -100,7 +66,6 @@ class PredictorAgent:
         return [primary, *rest]
 
     async def _llm_signal(self, ticker: str, candles: list[dict]) -> dict[str, Any]:
-        fallback = self._rule_based_signal(candles)
         compact = [
             {
                 "ts": str(c["timestamp_kst"]),
@@ -114,6 +79,7 @@ class PredictorAgent:
         ]
         prompt = f"""
 너는 한국주식 단기 예측 분석가다.
+현재 페르소나: {self.persona}
 티커: {ticker}
 최근 데이터(최신순): {json.dumps(compact, ensure_ascii=False)}
 
@@ -126,7 +92,9 @@ class PredictorAgent:
   "reasoning_summary": "한 줄 요약"
 }}
 """
+        attempted_providers: list[str] = []
         for provider in self._provider_order():
+            attempted_providers.append(provider)
             try:
                 if provider == "gpt" and self.gpt.is_configured:
                     raw = await self.gpt.ask_json(prompt)
@@ -140,18 +108,20 @@ class PredictorAgent:
                 signal = str(raw.get("signal", "HOLD")).upper()
                 if signal not in {"BUY", "SELL", "HOLD"}:
                     signal = "HOLD"
-                confidence = raw.get("confidence", fallback["confidence"])
+                confidence = raw.get("confidence")
                 return {
                     "signal": signal,
-                    "confidence": float(confidence) if confidence is not None else fallback["confidence"],
+                    "confidence": float(confidence) if confidence is not None else 0.5,
                     "target_price": raw.get("target_price"),
                     "stop_loss": raw.get("stop_loss"),
-                    "reasoning_summary": raw.get("reasoning_summary") or fallback["reasoning_summary"],
+                    "reasoning_summary": raw.get("reasoning_summary") or "LLM reasoning omitted",
                 }
             except Exception as e:
                 logger.warning("%s 신호 생성 실패 [%s]: %s", provider, ticker, e)
 
-        return fallback
+        raise RuntimeError(
+            f"사용 가능한 LLM provider가 없어 예측을 생성하지 못했습니다. providers={attempted_providers}, ticker={ticker}"
+        )
 
     async def run_once(self, tickers: list[str] | None = None, limit: int = 10) -> list[PredictionSignal]:
         if tickers is None:
@@ -159,9 +129,15 @@ class PredictorAgent:
             tickers = [r["ticker"] for r in ticker_rows]
 
         results: list[PredictionSignal] = []
+        failed_tickers: list[str] = []
         for ticker in tickers:
             candles = await fetch_recent_ohlcv(ticker, days=30)
-            llm_output = await self._llm_signal(ticker=ticker, candles=candles)
+            try:
+                llm_output = await self._llm_signal(ticker=ticker, candles=candles)
+            except Exception as e:
+                logger.warning("%s 예측 생략 [%s]: %s", self.agent_id, ticker, e)
+                failed_tickers.append(ticker)
+                continue
 
             signal = PredictionSignal(
                 agent_id=self.agent_id,
@@ -197,6 +173,7 @@ class PredictorAgent:
                     "agent_id": self.agent_id,
                     "strategy": self.strategy,
                     "count": len(results),
+                    "failed_tickers": failed_tickers,
                     "tickers": [s.ticker for s in results],
                     "timestamp_utc": datetime.utcnow().isoformat() + "Z",
                 },
@@ -204,13 +181,23 @@ class PredictorAgent:
             ),
         )
 
+        heartbeat_status = "healthy"
+        if failed_tickers and results:
+            heartbeat_status = "degraded"
+        elif failed_tickers and not results:
+            heartbeat_status = "error"
+
         await set_heartbeat(self.agent_id)
         await insert_heartbeat(
             AgentHeartbeatRecord(
                 agent_id=self.agent_id,
-                status="healthy",
-                last_action=f"예측 완료 ({len(results)}종목)",
-                metrics={"predictions": len(results), "strategy": self.strategy},
+                status=heartbeat_status,
+                last_action=f"예측 완료 ({len(results)}종목, 실패 {len(failed_tickers)}종목)",
+                metrics={
+                    "predictions": len(results),
+                    "failed_tickers": len(failed_tickers),
+                    "strategy": self.strategy,
+                },
             )
         )
         logger.info("PredictorAgent 실행 완료: %d종목", len(results))

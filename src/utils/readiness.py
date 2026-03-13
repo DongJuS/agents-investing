@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.db.queries import fetch_latest_operational_audit, fetch_latest_paper_trading_run
-from src.utils.config import get_settings
+from src.utils.config import get_settings, kis_account_number_for_scope, kis_app_key_for_scope, kis_app_secret_for_scope
 from src.utils.db_client import fetchrow, fetchval
 from src.utils.redis_client import get_redis
 
@@ -30,28 +30,46 @@ def _is_placeholder(value: str) -> bool:
     return any(p in lower for p in PLACEHOLDER_PATTERNS)
 
 
+def _is_valid_account_number(value: str) -> bool:
+    digits = "".join(ch for ch in (value or "") if ch.isdigit())
+    return len(digits) >= 10
+
+
 async def evaluate_real_trading_readiness() -> dict[str, Any]:
     """실거래 전환 전 필수 조건을 점검합니다."""
     settings = get_settings()
     checks: list[dict[str, Any]] = []
     audit_max_age_days = int(settings.readiness_audit_max_age_days)
     required_paper_days = int(settings.readiness_required_paper_days)
+    real_app_key = kis_app_key_for_scope(settings, "real")
+    real_app_secret = kis_app_secret_for_scope(settings, "real")
+    real_account_number = kis_account_number_for_scope(settings, "real")
 
     # 1) 필수 자격증명
     cred_pairs = [
-        ("KIS_APP_KEY", settings.kis_app_key),
-        ("KIS_APP_SECRET", settings.kis_app_secret),
-        ("KIS_ACCOUNT_NUMBER", settings.kis_account_number),
+        ("KIS_REAL_APP_KEY", real_app_key),
+        ("KIS_REAL_APP_SECRET", real_app_secret),
+        ("KIS_REAL_ACCOUNT_NUMBER", real_account_number),
         ("JWT_SECRET", settings.jwt_secret),
         ("REAL_TRADING_CONFIRMATION_CODE", settings.real_trading_confirmation_code),
     ]
     for key, value in cred_pairs:
         ok = bool(value and not _is_placeholder(value))
+        if key == "KIS_REAL_ACCOUNT_NUMBER":
+            ok = ok and _is_valid_account_number(str(value))
         checks.append(
             {
                 "key": f"cred:{key}",
                 "ok": ok,
-                "message": f"{key} 설정 {'정상' if ok else '누락/placeholder'}",
+                "message": (
+                    f"{key} 설정 정상"
+                    if ok
+                    else (
+                        f"{key} 계좌번호 형식 오류"
+                        if key == "KIS_REAL_ACCOUNT_NUMBER" and value and not _is_placeholder(str(value))
+                        else f"{key} 설정 누락/placeholder"
+                    )
+                ),
                 "severity": "critical",
             }
         )

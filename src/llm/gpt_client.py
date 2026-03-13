@@ -15,12 +15,14 @@ logger = get_logger(__name__)
 
 
 class GPTClient:
+    _global_quota_exhausted = False
+
     def __init__(self, model: str = "gpt-4o-mini") -> None:
         self.model = model
         settings = get_settings()
         self.api_key = settings.openai_api_key
         self._client: Optional[Any] = None
-        self._quota_exhausted = False
+        self._quota_exhausted = self.__class__._global_quota_exhausted
 
         if is_placeholder_secret(self.api_key):
             return
@@ -35,7 +37,7 @@ class GPTClient:
 
     @property
     def is_configured(self) -> bool:
-        return self._client is not None and not self._quota_exhausted
+        return self._client is not None and not self.__class__._global_quota_exhausted
 
     def _is_quota_error(self, error: Exception) -> bool:
         text = str(error).lower()
@@ -44,7 +46,7 @@ class GPTClient:
     async def ask(self, prompt: str, temperature: float = 0.2) -> str:
         if not self._client:
             raise RuntimeError("GPT client is not configured.")
-        if self._quota_exhausted:
+        if self.__class__._global_quota_exhausted:
             raise RuntimeError("GPT quota exhausted.")
 
         try:
@@ -57,6 +59,7 @@ class GPTClient:
         except Exception as e:
             if self._is_quota_error(e):
                 self._quota_exhausted = True
+                self.__class__._global_quota_exhausted = True
                 logger.warning("OpenAI quota exhausted: GPT 호출을 세션 동안 비활성화합니다.")
             raise
 

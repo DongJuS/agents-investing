@@ -2,8 +2,8 @@ import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from src.brokers import build_paper_broker
-from src.brokers.kis import KISOrderReceipt, KISPaperApiClient, KISPaperBroker
+from src.brokers import build_paper_broker, build_real_broker
+from src.brokers.kis import KISOrderReceipt, KISPaperApiClient, KISPaperBroker, KISRealApiClient, KISRealBroker
 from src.brokers.paper import PaperBroker
 from src.db.models import PaperOrderRequest
 
@@ -66,6 +66,39 @@ class KISPaperClientTest(unittest.IsolatedAsyncioTestCase):
         args, kwargs = request_mock.await_args
         self.assertEqual(args[2], "VTTC8434R")
         self.assertEqual(kwargs["params"]["CANO"], "50012345")
+
+    async def test_real_client_uses_real_tr_ids(self) -> None:
+        settings = types.SimpleNamespace(
+            kis_app_key="paper-app-key",
+            kis_app_secret="paper-app-secret",
+            kis_real_app_key="real-app-key",
+            kis_real_app_secret="real-app-secret",
+            kis_account_number="50012345-01",
+            kis_request_timeout_seconds=15,
+            kis_base_url_for_scope=lambda scope: "https://real.example" if scope == "real" else "https://paper.example",
+        )
+        client = KISRealApiClient(settings=settings, token_provider=AsyncMock(return_value="token"))
+        order = PaperOrderRequest(
+            ticker="005930",
+            name="삼성전자",
+            signal="SELL",
+            quantity=1,
+            price=70000,
+            signal_source="A",
+            agent_id="portfolio_manager_agent",
+            account_scope="real",
+        )
+
+        with patch.object(
+            client,
+            "_request_json",
+            new=AsyncMock(return_value={"output": {"ODNO": "99001122"}}),
+        ) as request_mock:
+            receipt = await client.place_order(order)
+
+        self.assertEqual(receipt.order_no, "99001122")
+        args, _ = request_mock.await_args
+        self.assertEqual(args[2], "TTTC0801U")
 
 
 class KISPaperBrokerTest(unittest.IsolatedAsyncioTestCase):
@@ -172,6 +205,20 @@ class PaperBrokerFactoryTest(unittest.TestCase):
         )
         broker = build_paper_broker(settings)
         self.assertIsInstance(broker, KISPaperBroker)
+
+    def test_build_real_broker_defaults_to_kis_live(self) -> None:
+        settings = types.SimpleNamespace(
+            real_broker_backend="kis",
+            kis_app_key="app-key",
+            kis_app_secret="app-secret",
+            kis_real_app_key="real-app-key",
+            kis_real_app_secret="real-app-secret",
+            kis_account_number="50012345-01",
+            kis_request_timeout_seconds=15,
+            kis_base_url_for_scope=lambda scope: "https://real.example" if scope == "real" else "https://paper.example",
+        )
+        broker = build_real_broker(settings)
+        self.assertIsInstance(broker, KISRealBroker)
 
 
 if __name__ == "__main__":

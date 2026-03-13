@@ -295,7 +295,14 @@ async def portfolio_position_stats(account_scope: AccountScope = "paper") -> dic
 async def get_portfolio_config() -> dict:
     row = await fetchrow(
         """
-        SELECT strategy_blend_ratio, max_position_pct, daily_loss_limit_pct, is_paper_trading
+        SELECT
+            strategy_blend_ratio,
+            max_position_pct,
+            daily_loss_limit_pct,
+            is_paper_trading,
+            enable_paper_trading,
+            enable_real_trading,
+            primary_account_scope
         FROM portfolio_config
         LIMIT 1
         """
@@ -306,8 +313,109 @@ async def get_portfolio_config() -> dict:
             "max_position_pct": 20,
             "daily_loss_limit_pct": 3,
             "is_paper_trading": True,
+            "enable_paper_trading": True,
+            "enable_real_trading": False,
+            "primary_account_scope": "paper",
         }
-    return dict(row)
+    payload = dict(row)
+    if payload.get("enable_paper_trading") is None:
+        payload["enable_paper_trading"] = bool(payload.get("is_paper_trading", True))
+    if payload.get("enable_real_trading") is None:
+        payload["enable_real_trading"] = not bool(payload.get("is_paper_trading", True))
+    if not payload.get("primary_account_scope"):
+        payload["primary_account_scope"] = "paper" if bool(payload.get("is_paper_trading", True)) else "real"
+    payload["is_paper_trading"] = normalize_account_scope(payload["primary_account_scope"]) == "paper"
+    return payload
+
+
+async def list_model_role_configs(strategy_code: str | None = None) -> list[dict]:
+    if strategy_code:
+        rows = await fetch(
+            """
+            SELECT
+                config_key, strategy_code, role, role_label, agent_id,
+                llm_model, persona, execution_order,
+                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM model_role_configs
+            WHERE strategy_code = $1
+            ORDER BY execution_order, config_key
+            """,
+            strategy_code,
+        )
+    else:
+        rows = await fetch(
+            """
+            SELECT
+                config_key, strategy_code, role, role_label, agent_id,
+                llm_model, persona, execution_order,
+                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM model_role_configs
+            ORDER BY strategy_code, execution_order, config_key
+            """
+        )
+    return [dict(r) for r in rows]
+
+
+async def upsert_model_role_config(
+    *,
+    config_key: str,
+    strategy_code: str,
+    role: str,
+    role_label: str,
+    agent_id: str,
+    llm_model: str,
+    persona: str,
+    execution_order: int,
+) -> None:
+    await execute(
+        """
+        INSERT INTO model_role_configs (
+            config_key, strategy_code, role, role_label, agent_id,
+            llm_model, persona, execution_order, created_at, updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, NOW(), NOW()
+        )
+        ON CONFLICT (config_key)
+        DO UPDATE SET
+            strategy_code = EXCLUDED.strategy_code,
+            role = EXCLUDED.role,
+            role_label = EXCLUDED.role_label,
+            agent_id = EXCLUDED.agent_id,
+            llm_model = EXCLUDED.llm_model,
+            persona = EXCLUDED.persona,
+            execution_order = EXCLUDED.execution_order,
+            updated_at = NOW()
+        """,
+        config_key,
+        strategy_code,
+        role,
+        role_label,
+        agent_id,
+        llm_model,
+        persona,
+        execution_order,
+    )
+
+
+async def update_model_role_config(
+    *,
+    config_key: str,
+    llm_model: str,
+    persona: str,
+) -> None:
+    await execute(
+        """
+        UPDATE model_role_configs
+        SET llm_model = $2,
+            persona = $3,
+            updated_at = NOW()
+        WHERE config_key = $1
+        """,
+        config_key,
+        llm_model,
+        persona,
+    )
 
 
 async def today_trade_totals(account_scope: AccountScope = "paper") -> dict:
@@ -490,7 +598,7 @@ async def upsert_trade_fill(
             signal_source, agent_id, kis_order_id, is_paper, account_scope, circuit_breaker, executed_at
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, TRUE, $10, FALSE, COALESCE($11, NOW())
+            $7, $8, $9, $10, $11, FALSE, COALESCE($12, NOW())
         )
         """,
         ticker,
@@ -502,6 +610,7 @@ async def upsert_trade_fill(
         signal_source,
         agent_id,
         kis_order_id,
+        scope == "paper",
         scope,
         executed_at,
     )
@@ -567,12 +676,12 @@ async def update_broker_order_status(
     await execute(
         """
         UPDATE broker_orders
-        SET status = $2,
+        SET status = $2::varchar,
             filled_quantity = $3,
             avg_fill_price = $4,
             broker_order_id = COALESCE($5, broker_order_id),
             rejection_reason = $6,
-            filled_at = CASE WHEN $2 = 'FILLED' THEN NOW() ELSE filled_at END,
+            filled_at = CASE WHEN $2::varchar = 'FILLED' THEN NOW() ELSE filled_at END,
             updated_at = NOW()
         WHERE client_order_id = $1
         """,
@@ -926,6 +1035,9 @@ async def insert_real_trading_audit(
     requested_by_email: str | None,
     requested_by_user_id: str | None,
     requested_mode_is_paper: bool,
+    requested_paper_enabled: bool,
+    requested_real_enabled: bool,
+    requested_primary_account_scope: str,
     confirmation_code_ok: bool,
     readiness_passed: bool,
     readiness_summary: dict,
@@ -938,16 +1050,22 @@ async def insert_real_trading_audit(
             requested_by_email,
             requested_by_user_id,
             requested_mode_is_paper,
+            requested_paper_enabled,
+            requested_real_enabled,
+            requested_primary_account_scope,
             confirmation_code_ok,
             readiness_passed,
             readiness_summary,
             applied,
             message
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
         """,
         requested_by_email,
         requested_by_user_id,
         requested_mode_is_paper,
+        requested_paper_enabled,
+        requested_real_enabled,
+        requested_primary_account_scope,
         confirmation_code_ok,
         readiness_passed,
         json.dumps(readiness_summary, ensure_ascii=False),
@@ -1021,7 +1139,11 @@ async def fetch_real_trading_audits(limit: int = 20) -> list[dict]:
     rows = await fetch(
         """
         SELECT id, requested_at, requested_by_email, requested_by_user_id,
-               requested_mode_is_paper, confirmation_code_ok, readiness_passed,
+               requested_mode_is_paper,
+               requested_paper_enabled,
+               requested_real_enabled,
+               requested_primary_account_scope,
+               confirmation_code_ok, readiness_passed,
                readiness_summary, applied, message
         FROM real_trading_audit
         ORDER BY requested_at DESC

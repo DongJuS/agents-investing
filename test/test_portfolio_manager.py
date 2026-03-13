@@ -52,21 +52,21 @@ class PortfolioManagerRiskGuardTest(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value={"quantity": 5, "current_price": 1_000, "avg_price": 1_000}),
             ),
             patch("src.agents.portfolio_manager.portfolio_total_value", new=AsyncMock(return_value=6_000)),
-            patch("src.agents.portfolio_manager.save_position", new=AsyncMock()) as save_mock,
-            patch("src.agents.portfolio_manager.insert_trade", new=AsyncMock()) as trade_mock,
+            patch.object(agent.paper_broker, "execute_order", new=AsyncMock()) as execute_order_mock,
         ):
             result = await agent.process_signal(
                 signal,
                 risk_config={
                     "max_position_pct": 50,
-                    "is_paper_trading": True,
+                    "enable_paper_trading": True,
+                    "enable_real_trading": False,
+                    "primary_account_scope": "paper",
                     "paper_seed_capital": 10_000,
                 },
             )
 
         self.assertIsNone(result)
-        save_mock.assert_not_called()
-        trade_mock.assert_not_called()
+        execute_order_mock.assert_not_called()
 
     async def test_process_signal_allows_first_buy_with_seed_capital(self) -> None:
         agent = PortfolioManagerAgent()
@@ -111,7 +111,9 @@ class PortfolioManagerRiskGuardTest(unittest.IsolatedAsyncioTestCase):
                 signal,
                 risk_config={
                     "max_position_pct": 20,
-                    "is_paper_trading": True,
+                    "enable_paper_trading": True,
+                    "enable_real_trading": False,
+                    "primary_account_scope": "paper",
                     "paper_seed_capital": 10_000_000,
                 },
             )
@@ -135,15 +137,20 @@ class PortfolioManagerRiskGuardTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "src.agents.portfolio_manager.get_portfolio_config",
-                new=AsyncMock(return_value={"daily_loss_limit_pct": 3, "max_position_pct": 20}),
-            ),
-            patch(
-                "src.agents.portfolio_manager.today_trade_totals",
-                new=AsyncMock(return_value={"buy_total": 10_000, "sell_total": 9_200}),
+                new=AsyncMock(
+                    return_value={
+                        "daily_loss_limit_pct": 3,
+                        "max_position_pct": 20,
+                        "enable_paper_trading": True,
+                        "enable_real_trading": False,
+                        "primary_account_scope": "paper",
+                    }
+                ),
             ),
             patch("src.agents.portfolio_manager.publish_message", new=AsyncMock()) as publish_mock,
             patch("src.agents.portfolio_manager.set_heartbeat", new=AsyncMock()) as heartbeat_mock,
             patch("src.agents.portfolio_manager.insert_heartbeat", new=AsyncMock()) as insert_heartbeat_mock,
+            patch.object(agent, "_is_daily_loss_blocked", new=AsyncMock(return_value=(True, -3.2))),
             patch.object(agent, "process_signal", new=AsyncMock()) as process_signal_mock,
         ):
             orders = await agent.process_predictions([signal])
@@ -153,6 +160,47 @@ class PortfolioManagerRiskGuardTest(unittest.IsolatedAsyncioTestCase):
         publish_mock.assert_awaited()
         heartbeat_mock.assert_awaited_once()
         insert_heartbeat_mock.assert_awaited_once()
+
+    async def test_process_predictions_executes_both_paper_and_real_when_enabled(self) -> None:
+        agent = PortfolioManagerAgent()
+        signal = PredictionSignal(
+            agent_id="predictor_1",
+            llm_model="manual",
+            strategy="A",
+            ticker="005930",
+            signal="BUY",
+            confidence=0.7,
+            trading_date=date.today(),
+        )
+
+        paper_result = {"ticker": "005930", "side": "BUY", "quantity": 1, "price": 70000, "account_scope": "paper"}
+        real_result = {"ticker": "005930", "side": "BUY", "quantity": 1, "price": 70000, "account_scope": "real"}
+
+        with (
+            patch(
+                "src.agents.portfolio_manager.get_portfolio_config",
+                new=AsyncMock(
+                    return_value={
+                        "daily_loss_limit_pct": 3,
+                        "max_position_pct": 20,
+                        "enable_paper_trading": True,
+                        "enable_real_trading": True,
+                        "primary_account_scope": "paper",
+                    }
+                ),
+            ),
+            patch.object(agent, "_is_daily_loss_blocked", new=AsyncMock(return_value=(False, 0.0))),
+            patch.object(agent, "process_signal", new=AsyncMock(side_effect=[paper_result, real_result])) as process_signal_mock,
+            patch("src.agents.portfolio_manager.publish_message", new=AsyncMock()),
+            patch("src.agents.portfolio_manager.set_heartbeat", new=AsyncMock()),
+            patch("src.agents.portfolio_manager.insert_heartbeat", new=AsyncMock()),
+        ):
+            orders = await agent.process_predictions([signal])
+
+        self.assertEqual(orders, [paper_result, real_result])
+        self.assertEqual(process_signal_mock.await_count, 2)
+        self.assertEqual(process_signal_mock.await_args_list[0].kwargs["account_scope_override"], "paper")
+        self.assertEqual(process_signal_mock.await_args_list[1].kwargs["account_scope_override"], "real")
 
 
 if __name__ == "__main__":

@@ -37,13 +37,18 @@ class PortfolioManagerKISBackendTest(unittest.IsolatedAsyncioTestCase):
             result = await agent.process_signal(
                 signal,
                 risk_config={
-                    "is_paper_trading": True,
+                    "enable_paper_trading": True,
+                    "enable_real_trading": False,
+                    "primary_account_scope": "paper",
                     "max_position_pct": 20,
                     "daily_loss_limit_pct": 3,
                 },
             )
 
-        self.assertEqual(result, {"ticker": "005930", "side": "BUY", "quantity": 1, "price": 70000})
+        self.assertEqual(
+            result,
+            {"ticker": "005930", "side": "BUY", "quantity": 1, "price": 70000, "account_scope": "paper"},
+        )
         agent.paper_broker.execute_order.assert_awaited_once()
 
 

@@ -28,6 +28,7 @@ from src.db.queries import fetch_recent_ohlcv, insert_debate_transcript, insert_
 from src.llm.claude_client import ClaudeClient
 from src.llm.gemini_client import GeminiClient
 from src.llm.gpt_client import GPTClient
+from src.services.model_config import get_strategy_b_roles
 from src.utils.config import get_settings
 from src.utils.logging import get_logger, setup_logging
 
@@ -64,24 +65,73 @@ class StrategyBConsensus:
             consensus_threshold if consensus_threshold is not None else default_threshold
         )
         self.consensus_threshold = max(0.0, min(1.0, threshold))
+        self.role_configs: dict[str, dict[str, Any]] | None = None
 
     @staticmethod
     def _clamp_confidence(value: float) -> float:
         return max(0.0, min(1.0, value))
 
     @staticmethod
-    def _rule_signal(candles: list[dict]) -> tuple[str, float, str]:
-        if not candles:
-            return "HOLD", 0.5, "데이터 부족"
-        closes = [int(c["close"]) for c in candles[:20]]
-        latest = closes[0]
-        avg5 = sum(closes[:5]) / min(5, len(closes))
-        avg20 = sum(closes) / len(closes)
-        if avg5 > avg20 * 1.01:
-            return "BUY", 0.62, f"단기 평균({avg5:.1f})이 장기 평균({avg20:.1f}) 상회"
-        if avg5 < avg20 * 0.99:
-            return "SELL", 0.61, f"단기 평균({avg5:.1f})이 장기 평균({avg20:.1f}) 하회"
-        return "HOLD", 0.55, f"평균 근접 구간(현재가 {latest})"
+    def _provider_name_for_model(model: str) -> str:
+        lowered = model.lower()
+        if "claude" in lowered:
+            return "claude"
+        if "gpt" in lowered:
+            return "gpt"
+        if "gemini" in lowered:
+            return "gemini"
+        raise ValueError(f"지원하지 않는 model/provider 조합입니다: {model}")
+
+    def _provider_order_for_model(self, model: str) -> list[str]:
+        primary = self._provider_name_for_model(model)
+        rest = [provider for provider in ("claude", "gpt", "gemini") if provider != primary]
+        return [primary, *rest]
+
+    async def _ensure_role_configs(self) -> dict[str, dict[str, Any]]:
+        if self.role_configs is not None:
+            return self.role_configs
+
+        rows = await get_strategy_b_roles()
+        self.role_configs = {str(row["config_key"]): dict(row) for row in rows}
+        return self.role_configs
+
+    async def _role_config(self, config_key: str) -> dict[str, Any]:
+        role_configs = await self._ensure_role_configs()
+        if config_key not in role_configs:
+            raise RuntimeError(f"Strategy B role config missing: {config_key}")
+        return role_configs[config_key]
+
+    async def _ask_json_with_fallback(self, model: str, prompt: str) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for provider in self._provider_order_for_model(model):
+            try:
+                if provider == "gpt" and self.gpt.is_configured:
+                    return await self.gpt.ask_json(prompt)
+                if provider == "gemini" and self.gemini.is_configured:
+                    return await self.gemini.ask_json(prompt)
+                if provider == "claude" and self.claude.is_configured:
+                    return await self.claude.ask_json(prompt)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("%s JSON 호출 실패: %s", provider, exc)
+
+        raise RuntimeError(f"LLM JSON 호출 실패: model={model}, last_error={last_error}")
+
+    async def _ask_text_with_fallback(self, model: str, prompt: str) -> str:
+        last_error: Exception | None = None
+        for provider in self._provider_order_for_model(model):
+            try:
+                if provider == "gpt" and self.gpt.is_configured:
+                    return await self.gpt.ask(prompt)
+                if provider == "gemini" and self.gemini.is_configured:
+                    return await self.gemini.ask(prompt)
+                if provider == "claude" and self.claude.is_configured:
+                    return await self.claude.ask(prompt)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("%s text 호출 실패: %s", provider, exc)
+
+        raise RuntimeError(f"LLM text 호출 실패: model={model}, last_error={last_error}")
 
     async def _propose(
         self,
@@ -90,13 +140,7 @@ class StrategyBConsensus:
         round_no: int,
         prior_context: str | None = None,
     ) -> dict[str, Any]:
-        fallback_signal, fallback_conf, fallback_reason = self._rule_signal(candles)
-        if not self.claude.is_configured:
-            return {
-                "signal": fallback_signal,
-                "confidence": self._clamp_confidence(fallback_conf),
-                "argument": f"[round {round_no} fallback] {fallback_reason}",
-            }
+        proposer_role = await self._role_config("strategy_b_proposer")
 
         compact = [
             {"c": int(c["close"]), "v": int(c["volume"]), "ts": str(c["timestamp_kst"])}
@@ -104,6 +148,8 @@ class StrategyBConsensus:
         ]
         prior = f"\n이전 라운드 요약: {prior_context}\n" if prior_context else "\n"
         prompt = f"""
+너는 한국주식 토론의 Proposer다.
+현재 페르소나: {proposer_role['persona']}
 라운드: {round_no}
 티커 {ticker}의 최근 데이터: {json.dumps(compact, ensure_ascii=False)}
 {prior}
@@ -114,57 +160,36 @@ BUY/SELL/HOLD 중 하나를 선택하고 JSON으로 답해라:
   "argument": "핵심 근거 한 문단"
 }}
 """
-        try:
-            data = await self.claude.ask_json(prompt)
-            signal = str(data.get("signal", "HOLD")).upper()
-            if signal not in {"BUY", "SELL", "HOLD"}:
-                signal = "HOLD"
-            confidence = self._clamp_confidence(float(data.get("confidence", fallback_conf)))
-            return {
-                "signal": signal,
-                "confidence": confidence,
-                "argument": data.get("argument", fallback_reason),
-            }
-        except Exception as e:
-            logger.warning("proposer 실패 [%s]: %s", ticker, e)
-            return {
-                "signal": fallback_signal,
-                "confidence": self._clamp_confidence(fallback_conf),
-                "argument": f"[round {round_no} fallback] {fallback_reason}",
-            }
+        data = await self._ask_json_with_fallback(str(proposer_role["llm_model"]), prompt)
+        signal = str(data.get("signal", "HOLD")).upper()
+        if signal not in {"BUY", "SELL", "HOLD"}:
+            signal = "HOLD"
+        confidence = self._clamp_confidence(float(data.get("confidence", 0.5)))
+        return {
+            "signal": signal,
+            "confidence": confidence,
+            "argument": data.get("argument", "LLM argument omitted"),
+        }
 
     async def _challenge(
         self,
         role: str,
         ticker: str,
         proposer: dict[str, Any],
-        use_client: str,
+        config_key: str,
         round_no: int,
     ) -> str:
+        role_config = await self._role_config(config_key)
         prompt = f"""
+너는 한국주식 토론의 {role} 역할이다.
+현재 페르소나: {role_config['persona']}
 라운드: {round_no}
 역할: {role}
 티커: {ticker}
 Proposer 주장: {json.dumps(proposer, ensure_ascii=False)}
 반론을 2~3문장으로 작성해라.
 """
-
-        provider_order = [use_client] + [p for p in ("gpt", "gemini", "claude") if p != use_client]
-        for provider in provider_order:
-            try:
-                if provider == "gpt" and self.gpt.is_configured:
-                    return await self.gpt.ask(prompt)
-                if provider == "gemini" and self.gemini.is_configured:
-                    return await self.gemini.ask(prompt)
-                if provider == "claude" and self.claude.is_configured:
-                    return await self.claude.ask(prompt)
-            except Exception as e:
-                logger.warning("%s challenger 실패 [%s]: %s", provider, ticker, e)
-
-        return (
-            f"[round {round_no} fallback-{role}] proposer 신호({proposer['signal']})는 "
-            "변동성 및 리스크 요인을 추가 검토해야 함."
-        )
+        return await self._ask_text_with_fallback(str(role_config["llm_model"]), prompt)
 
     async def _synthesize(
         self,
@@ -174,12 +199,12 @@ Proposer 주장: {json.dumps(proposer, ensure_ascii=False)}
         challenger2: str,
         round_no: int,
     ) -> DebateResult:
+        synthesizer_role = await self._role_config("strategy_b_synthesizer")
         fallback_signal = proposer["signal"]
         fallback_conf = self._clamp_confidence(float(proposer.get("confidence", 0.55)))
-        fallback_consensus = fallback_conf >= self.consensus_threshold
-
-        if self.claude.is_configured:
-            prompt = f"""
+        prompt = f"""
+너는 한국주식 토론의 Synthesizer다.
+현재 페르소나: {synthesizer_role['persona']}
 라운드: {round_no}
 티커: {ticker}
 proposer: {json.dumps(proposer, ensure_ascii=False)}
@@ -198,57 +223,35 @@ challenger2: {challenger2}
   "no_consensus_reason": "string | null"
 }}
 """
-            try:
-                data = await self.claude.ask_json(prompt)
-                signal = str(data.get("final_signal", fallback_signal)).upper()
-                if signal not in {"BUY", "SELL", "HOLD"}:
-                    signal = "HOLD"
-                conf = self._clamp_confidence(float(data.get("confidence", fallback_conf)))
-                llm_consensus = bool(data.get("consensus_reached", fallback_consensus))
-                consensus = llm_consensus and conf >= self.consensus_threshold
-                summary = data.get("summary", "종합 판단")
-                no_reason = data.get("no_consensus_reason")
-                if not consensus:
-                    no_reason = no_reason or (
-                        "confidence_below_threshold"
-                        if conf < self.consensus_threshold
-                        else "consensus_not_reached"
-                    )
-                return DebateResult(
-                    signal=signal,
-                    confidence=conf,
-                    proposer=proposer["argument"],
-                    challenger1=challenger1,
-                    challenger2=challenger2,
-                    synthesizer=summary,
-                    consensus_reached=consensus,
-                    no_consensus_reason=None if consensus else no_reason,
-                )
-            except Exception as e:
-                logger.warning("synthesizer 실패 [%s]: %s", ticker, e)
-
-        signal = fallback_signal if fallback_consensus else "HOLD"
-        summary = "fallback 합의 결과"
-        no_reason = None
-        if not fallback_consensus:
-            no_reason = (
+        data = await self._ask_json_with_fallback(str(synthesizer_role["llm_model"]), prompt)
+        signal = str(data.get("final_signal", fallback_signal)).upper()
+        if signal not in {"BUY", "SELL", "HOLD"}:
+            signal = "HOLD"
+        conf = self._clamp_confidence(float(data.get("confidence", fallback_conf)))
+        llm_consensus = bool(data.get("consensus_reached", False))
+        consensus = llm_consensus and conf >= self.consensus_threshold
+        summary = data.get("summary", "종합 판단")
+        no_reason = data.get("no_consensus_reason")
+        if not consensus:
+            no_reason = no_reason or (
                 "confidence_below_threshold"
-                if fallback_conf < self.consensus_threshold
-                else "fallback_no_consensus"
+                if conf < self.consensus_threshold
+                else "consensus_not_reached"
             )
         return DebateResult(
             signal=signal,
-            confidence=fallback_conf,
+            confidence=conf,
             proposer=proposer["argument"],
             challenger1=challenger1,
             challenger2=challenger2,
             synthesizer=summary,
-            consensus_reached=fallback_consensus,
-            no_consensus_reason=no_reason,
+            consensus_reached=consensus,
+            no_consensus_reason=None if consensus else no_reason,
         )
 
     async def run_for_ticker(self, ticker: str) -> PredictionSignal:
         started = datetime.utcnow()
+        await self._ensure_role_configs()
         candles = await fetch_recent_ohlcv(ticker=ticker, days=30)
         prior_context: str | None = None
         round_payloads: list[dict[str, Any]] = []
@@ -265,14 +268,14 @@ challenger2: {challenger2}
                 "Challenger1",
                 ticker,
                 proposer,
-                use_client="gpt",
+                config_key="strategy_b_challenger_1",
                 round_no=round_no,
             )
             challenger2 = await self._challenge(
                 "Challenger2",
                 ticker,
                 proposer,
-                use_client="gemini",
+                config_key="strategy_b_challenger_2",
                 round_no=round_no,
             )
             synthesis = await self._synthesize(
@@ -305,29 +308,7 @@ challenger2: {challenger2}
             )
 
         if synthesis is None:
-            synthesis = DebateResult(
-                signal="HOLD",
-                confidence=0.0,
-                proposer="데이터 부족",
-                challenger1="데이터 부족",
-                challenger2="데이터 부족",
-                synthesizer="합의 결과 없음",
-                consensus_reached=False,
-                no_consensus_reason="empty_round_execution",
-            )
-            round_payloads.append(
-                {
-                    "round": 1,
-                    "proposer": synthesis.proposer,
-                    "challenger1": synthesis.challenger1,
-                    "challenger2": synthesis.challenger2,
-                    "synthesizer": synthesis.synthesizer,
-                    "signal": synthesis.signal,
-                    "confidence": synthesis.confidence,
-                    "consensus_reached": synthesis.consensus_reached,
-                    "no_consensus_reason": synthesis.no_consensus_reason,
-                }
-            )
+            raise RuntimeError(f"Strategy B debate produced no synthesis for ticker={ticker}")
 
         actual_rounds = len(round_payloads)
         final_signal = synthesis.signal if synthesis.consensus_reached else "HOLD"
@@ -377,9 +358,10 @@ challenger2: {challenger2}
             duration_seconds=duration,
         )
 
+        synthesizer_role = await self._role_config("strategy_b_synthesizer")
         signal = PredictionSignal(
-            agent_id="consensus_synthesizer",
-            llm_model="claude-3-5-sonnet-latest",
+            agent_id=str(synthesizer_role["agent_id"]),
+            llm_model=str(synthesizer_role["llm_model"]),
             strategy="B",
             ticker=ticker,
             signal=final_signal,
@@ -398,8 +380,16 @@ challenger2: {challenger2}
         return signal
 
     async def run(self, tickers: list[str]) -> list[PredictionSignal]:
+        await self._ensure_role_configs()
         tasks = [self.run_for_ticker(t) for t in tickers]
-        return await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        signals: list[PredictionSignal] = []
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception):
+                logger.warning("Strategy B 토론 생략 [%s]: %s", ticker, result)
+                continue
+            signals.append(result)
+        return signals
 
 
 async def _main_async(args: argparse.Namespace) -> None:

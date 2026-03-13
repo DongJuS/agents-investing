@@ -54,16 +54,15 @@ class PredictorFailoverTest(unittest.IsolatedAsyncioTestCase):
         agent.claude.ask_json.assert_awaited_once()
         agent.gemini.ask_json.assert_not_awaited()
 
-    async def test_returns_rule_signal_when_all_providers_unavailable(self) -> None:
+    async def test_raises_when_all_providers_unavailable(self) -> None:
         candles = _build_candles()
         agent = PredictorAgent(llm_model="claude-3-5-sonnet-latest")
         agent.claude = types.SimpleNamespace(is_configured=False, ask_json=AsyncMock())
         agent.gpt = types.SimpleNamespace(is_configured=False, ask_json=AsyncMock())
         agent.gemini = types.SimpleNamespace(is_configured=False, ask_json=AsyncMock())
 
-        expected = agent._rule_based_signal(candles)
-        result = await agent._llm_signal("005930", candles)
-        self.assertEqual(result, expected)
+        with self.assertRaises(RuntimeError):
+            await agent._llm_signal("005930", candles)
 
 
 if __name__ == "__main__":

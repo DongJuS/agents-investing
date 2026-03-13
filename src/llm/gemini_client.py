@@ -16,6 +16,8 @@ logger = get_logger(__name__)
 
 
 class GeminiClient:
+    _global_quota_exhausted = False
+
     def __init__(self, model: str = "gemini-1.5-pro") -> None:
         self.model = model
         settings = get_settings()
@@ -23,6 +25,7 @@ class GeminiClient:
         self.cli_timeout_seconds = settings.llm_cli_timeout_seconds
         self._cli_command = build_cli_command(settings.gemini_cli_command, model=self.model)
         self._model: Optional[Any] = None
+        self._quota_exhausted = self.__class__._global_quota_exhausted
 
         if self._cli_command:
             if is_cli_available(self._cli_command):
@@ -45,7 +48,21 @@ class GeminiClient:
 
     @property
     def is_configured(self) -> bool:
-        return bool(self._cli_command) or self._model is not None
+        return (bool(self._cli_command) or self._model is not None) and not self.__class__._global_quota_exhausted
+
+    def _is_quota_error(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return any(
+            token in text
+            for token in (
+                "quota",
+                "resource_exhausted",
+                "resource exhausted",
+                "429",
+                "rate limit",
+                "too many requests",
+            )
+        )
 
     async def ask(self, prompt: str) -> str:
         if self._cli_command:
@@ -54,6 +71,8 @@ class GeminiClient:
                 prompt=prompt,
                 timeout_seconds=self.cli_timeout_seconds,
             )
+        if self.__class__._global_quota_exhausted:
+            raise RuntimeError("Gemini quota exhausted.")
         if not self._model:
             raise RuntimeError("Gemini client is not configured.")
 
@@ -64,7 +83,14 @@ class GeminiClient:
             resp = self._model.generate_content(prompt)
             return getattr(resp, "text", "") or ""
 
-        return (await asyncio.to_thread(_run)).strip()
+        try:
+            return (await asyncio.to_thread(_run)).strip()
+        except Exception as e:
+            if self._is_quota_error(e):
+                self._quota_exhausted = True
+                self.__class__._global_quota_exhausted = True
+                logger.warning("Gemini quota exhausted: Gemini 호출을 세션 동안 비활성화합니다.")
+            raise
 
     async def ask_json(self, prompt: str) -> dict:
         text = await self.ask(prompt + "\n\nJSON 객체 하나만 출력하세요.")

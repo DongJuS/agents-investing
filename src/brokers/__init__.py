@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from src.brokers.kis import KISPaperApiClient, KISPaperBroker
+from src.brokers.kis import KISPaperApiClient, KISPaperBroker, KISRealApiClient, KISRealBroker
 from src.brokers.paper import PaperBroker, PaperBrokerExecution
+from src.utils.account_scope import normalize_account_scope
 from src.utils.config import Settings, get_settings
 from src.utils.logging import get_logger
 
@@ -27,10 +28,40 @@ def build_paper_broker(settings: Settings | None = None):
     logger.warning("알 수 없는 PAPER_BROKER_BACKEND=%s, internal 브로커로 폴백합니다.", backend)
     return internal
 
+
+def build_real_broker(settings: Settings | None = None):
+    broker_settings = settings or get_settings()
+    backend = str(getattr(broker_settings, "real_broker_backend", "kis")).strip().lower()
+
+    if backend == "kis":
+        return KISRealBroker(
+            settings=broker_settings,
+            execution_mode=backend,
+            client=KISRealApiClient(settings=broker_settings),
+        )
+
+    logger.warning("알 수 없는 REAL_BROKER_BACKEND=%s, KIS 실거래 브로커를 사용합니다.", backend)
+    return KISRealBroker(
+        settings=broker_settings,
+        execution_mode="kis",
+        client=KISRealApiClient(settings=broker_settings),
+    )
+
+
+def build_broker_for_scope(account_scope: str, settings: Settings | None = None):
+    scope = normalize_account_scope(account_scope)
+    if scope == "real":
+        return build_real_broker(settings)
+    return build_paper_broker(settings)
+
 __all__ = [
     "PaperBroker",
     "PaperBrokerExecution",
     "KISPaperApiClient",
     "KISPaperBroker",
+    "KISRealApiClient",
+    "KISRealBroker",
+    "build_broker_for_scope",
     "build_paper_broker",
+    "build_real_broker",
 ]

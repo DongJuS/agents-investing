@@ -25,13 +25,13 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from src.services.kis_session import issue_kis_token, revoke_kis_token
-from src.utils.config import get_settings
+from src.utils.config import get_settings, kis_app_key_for_scope, kis_app_secret_for_scope
 from src.utils.logging import setup_logging
 from src.utils.redis_client import (
-    KEY_KIS_OAUTH_TOKEN,
     TTL_KIS_TOKEN,
     close_redis,
     get_redis,
+    kis_oauth_token_key,
 )
 
 setup_logging()
@@ -40,15 +40,17 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def issue_token() -> dict:
+async def issue_token(scope: str) -> dict:
     """KIS Developers OAuth2 토큰을 발급하고 Redis에 저장합니다."""
-    if not settings.kis_app_key or not settings.kis_app_secret:
+    app_key = kis_app_key_for_scope(settings, scope)
+    app_secret = kis_app_secret_for_scope(settings, scope)
+    if not app_key or not app_secret:
         logger.error("KIS_APP_KEY, KIS_APP_SECRET 환경변수가 설정되지 않았습니다.")
         sys.exit(1)
 
-    mode = "페이퍼" if settings.kis_is_paper_trading else "실거래"
-    logger.info("KIS 토큰 발급 요청 [%s 모드]: %s", mode, f"{settings.kis_base_url}/oauth2/tokenP")
-    token_info = await issue_kis_token(settings)
+    mode = "페이퍼" if scope == "paper" else "실거래"
+    logger.info("KIS 토큰 발급 요청 [%s 모드]: %s", mode, f"{settings.kis_base_url_for_scope(scope)}/oauth2/tokenP")
+    token_info = await issue_kis_token(settings, account_scope=scope)
     logger.info(
         "✅ KIS 토큰 발급 완료 — Redis TTL: %d시간, 만료: %d초 후",
         TTL_KIS_TOKEN // 3600,
@@ -58,19 +60,20 @@ async def issue_token() -> dict:
     return token_info
 
 
-async def check_token() -> None:
+async def check_token(scope: str) -> None:
     """Redis에 저장된 KIS 토큰 상태를 출력합니다."""
     import json
 
     redis = await get_redis()
-    raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
+    token_key = kis_oauth_token_key(scope)
+    raw = await redis.get(token_key)
 
     if not raw:
-        logger.warning("Redis에 KIS 토큰이 없습니다. 토큰을 발급하세요.")
+        logger.warning("Redis에 KIS %s 토큰이 없습니다. 토큰을 발급하세요.", scope)
         return
 
     token_info = json.loads(raw)
-    ttl = await redis.ttl(KEY_KIS_OAUTH_TOKEN)
+    ttl = await redis.ttl(token_key)
     access_token_preview = token_info["access_token"][:20] + "..."
 
     logger.info("─── KIS 토큰 상태 ──────────────────")
@@ -81,31 +84,42 @@ async def check_token() -> None:
         logger.warning("  ⚠️  토큰이 1시간 내에 만료됩니다. 갱신을 권장합니다.")
 
 
-async def revoke_token() -> None:
+async def revoke_token(scope: str) -> None:
     """발급된 KIS 토큰을 폐기하고 Redis에서 삭제합니다."""
     redis = await get_redis()
-    raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
+    token_key = kis_oauth_token_key(scope)
+    raw = await redis.get(token_key)
     if not raw:
-        logger.info("Redis에 저장된 토큰이 없습니다.")
+        logger.info("Redis에 저장된 %s 토큰이 없습니다.", scope)
         return
-    await revoke_kis_token(settings)
-    logger.info("✅ KIS 토큰이 폐기되었습니다.")
+    await revoke_kis_token(settings, account_scope=scope)
+    logger.info("✅ KIS %s 토큰이 폐기되었습니다.", scope)
 
 
 async def main_async(args: argparse.Namespace) -> None:
     try:
+        scopes = ["paper", "real"] if args.scope == "all" else [args.scope]
         if args.check:
-            await check_token()
+            for scope in scopes:
+                await check_token(scope)
         elif args.revoke:
-            await revoke_token()
+            for scope in scopes:
+                await revoke_token(scope)
         else:
-            await issue_token()
+            for scope in scopes:
+                await issue_token(scope)
     finally:
         await close_redis()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="KIS Developers OAuth2 토큰 관리")
+    parser.add_argument(
+        "--scope",
+        choices=["paper", "real", "all"],
+        default="paper" if settings.kis_is_paper_trading else "real",
+        help="토큰을 발급/확인/폐기할 계좌 scope",
+    )
     parser.add_argument("--check", action="store_true", help="저장된 토큰 상태 확인")
     parser.add_argument("--revoke", action="store_true", help="토큰 폐기")
     args = parser.parse_args()

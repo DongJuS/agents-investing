@@ -18,21 +18,20 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
-from src.brokers import build_paper_broker
+from src.brokers import build_paper_broker, build_real_broker
 from src.db.models import AgentHeartbeatRecord, PaperOrderRequest, PredictionSignal
 from src.db.queries import (
     fetch_recent_ohlcv,
+    fetch_trade_rows_for_date,
     get_portfolio_config,
     get_position,
     get_trading_account,
     insert_heartbeat,
-    insert_trade,
     portfolio_total_value,
-    save_position,
-    today_trade_totals,
 )
 from src.utils.account_scope import normalize_account_scope
 from src.utils.logging import get_logger, setup_logging
+from src.utils.performance import compute_trade_performance
 from src.utils.redis_client import (
     KEY_LATEST_TICKS,
     TOPIC_ALERTS,
@@ -50,10 +49,59 @@ class PortfolioManagerAgent:
     def __init__(self, agent_id: str = "portfolio_manager_agent") -> None:
         self.agent_id = agent_id
         self.paper_broker = build_paper_broker()
+        self.real_broker = build_real_broker()
 
     @staticmethod
-    def _account_scope_from_config(cfg: dict) -> str:
+    def _primary_account_scope_from_config(cfg: dict) -> str:
+        scope = cfg.get("primary_account_scope")
+        if scope:
+            return normalize_account_scope(scope)
         return normalize_account_scope("paper" if bool(cfg.get("is_paper_trading", True)) else "real")
+
+    @classmethod
+    def _enabled_account_scopes_from_config(cls, cfg: dict) -> list[str]:
+        enable_paper = bool(cfg.get("enable_paper_trading", bool(cfg.get("is_paper_trading", True))))
+        enable_real = bool(cfg.get("enable_real_trading", not bool(cfg.get("is_paper_trading", True))))
+        primary = cls._primary_account_scope_from_config(cfg)
+        enabled = {"paper": enable_paper, "real": enable_real}
+        ordered_scopes = [primary, "real" if primary == "paper" else "paper"]
+        return [scope for scope in ordered_scopes if enabled.get(scope, False)]
+
+    @staticmethod
+    def _broker_for_scope(account_scope: str, paper_broker, real_broker):
+        return paper_broker if account_scope == "paper" else real_broker
+
+    async def _daily_realized_pnl_pct(self, account_scope: str) -> float:
+        rows = await fetch_trade_rows_for_date(datetime.utcnow().date(), account_scope=account_scope)
+        metrics = compute_trade_performance(rows)
+        invested_capital = float(metrics.get("invested_capital") or 0)
+        realized_pnl = float(metrics.get("realized_pnl") or 0)
+        if invested_capital <= 0:
+            return 0.0
+        return (realized_pnl / invested_capital) * 100.0
+
+    async def _is_daily_loss_blocked(self, account_scope: str, cfg: dict) -> tuple[bool, float]:
+        daily_loss_limit_pct = int(cfg.get("daily_loss_limit_pct", 3))
+        pnl_pct = await self._daily_realized_pnl_pct(account_scope)
+        return pnl_pct <= -daily_loss_limit_pct, pnl_pct
+
+    async def _publish_circuit_breaker(self, account_scope: str, pnl_pct: float, daily_loss_limit_pct: int) -> None:
+        message = (
+            f"{account_scope} 계좌 일일 손실 한도 도달로 주문 중단 "
+            f"(realized_pnl={pnl_pct:.2f}%, limit=-{daily_loss_limit_pct}%)"
+        )
+        logger.warning(message)
+        await publish_message(
+            TOPIC_ALERTS,
+            json.dumps(
+                {
+                    "type": "circuit_breaker",
+                    "account_scope": account_scope,
+                    "message": message,
+                },
+                ensure_ascii=False,
+            ),
+        )
 
     async def _resolve_name_and_price(self, ticker: str, target_price: Optional[int]) -> tuple[str, int]:
         if target_price:
@@ -84,13 +132,16 @@ class PortfolioManagerAgent:
         signal: PredictionSignal,
         signal_source_override: Optional[str] = None,
         risk_config: Optional[dict] = None,
+        account_scope_override: Optional[str] = None,
     ) -> Optional[dict]:
         if signal.signal == "HOLD":
             return None
 
         signal_source = signal_source_override or signal.strategy
         cfg = risk_config or {}
-        account_scope = self._account_scope_from_config(cfg)
+        account_scope = normalize_account_scope(
+            account_scope_override or self._primary_account_scope_from_config(cfg)
+        )
         name, price = await self._resolve_name_and_price(signal.ticker, signal.target_price)
         if price <= 0:
             logger.warning("가격 정보 없음으로 주문 스킵: %s", signal.ticker)
@@ -136,31 +187,17 @@ class PortfolioManagerAgent:
                 agent_id=self.agent_id,
                 account_scope=account_scope,
             )
-            if is_paper:
-                execution = await self.paper_broker.execute_order(order)
-                if execution.status == "REJECTED":
-                    logger.warning("페이퍼 주문 거절: %s (%s)", signal.ticker, execution.rejection_reason)
-                    return None
-            else:
-                prev_qty = int(position["quantity"]) if position else 0
-                prev_avg = int(position["avg_price"]) if position else 0
-                new_qty = prev_qty + order_qty
-                new_avg = int(((prev_qty * prev_avg) + (order_qty * price)) / new_qty)
-                await save_position(
-                    ticker=signal.ticker,
-                    name=name,
-                    quantity=new_qty,
-                    avg_price=new_avg,
-                    current_price=price,
-                    is_paper=is_paper,
-                    account_scope=account_scope,
-                )
-                await insert_trade(order)
+            broker = self._broker_for_scope(account_scope, self.paper_broker, self.real_broker)
+            execution = await broker.execute_order(order)
+            if execution.status == "REJECTED":
+                logger.warning("%s 주문 거절: %s (%s)", account_scope, signal.ticker, execution.rejection_reason)
+                return None
             return {
                 "ticker": order.ticker,
                 "side": order.signal,
                 "quantity": order.quantity,
                 "price": order.price,
+                "account_scope": account_scope,
             }
 
         # SELL
@@ -179,27 +216,17 @@ class PortfolioManagerAgent:
             agent_id=self.agent_id,
             account_scope=account_scope,
         )
-        if account_scope == "paper":
-            execution = await self.paper_broker.execute_order(order)
-            if execution.status == "REJECTED":
-                logger.warning("페이퍼 주문 거절: %s (%s)", signal.ticker, execution.rejection_reason)
-                return None
-        else:
-            await save_position(
-                ticker=signal.ticker,
-                name=name,
-                quantity=0,
-                avg_price=0,
-                current_price=price,
-                is_paper=False,
-                account_scope=account_scope,
-            )
-            await insert_trade(order)
+        broker = self._broker_for_scope(account_scope, self.paper_broker, self.real_broker)
+        execution = await broker.execute_order(order)
+        if execution.status == "REJECTED":
+            logger.warning("%s 주문 거절: %s (%s)", account_scope, signal.ticker, execution.rejection_reason)
+            return None
         return {
             "ticker": order.ticker,
             "side": order.signal,
             "quantity": order.quantity,
             "price": order.price,
+            "account_scope": account_scope,
         }
 
     async def process_predictions(
@@ -208,49 +235,42 @@ class PortfolioManagerAgent:
         signal_source_override: Optional[str] = None,
     ) -> list[dict]:
         cfg = await get_portfolio_config()
-        account_scope = self._account_scope_from_config(cfg)
-        totals = await today_trade_totals(account_scope=account_scope)
-        buy_total = totals["buy_total"]
-        sell_total = totals["sell_total"]
-        pnl_pct = ((sell_total - buy_total) / buy_total * 100) if buy_total > 0 else 0.0
+        enabled_scopes = self._enabled_account_scopes_from_config(cfg)
         daily_loss_limit_pct = int(cfg.get("daily_loss_limit_pct", 3))
 
-        if buy_total > 0 and pnl_pct <= -daily_loss_limit_pct:
-            message = (
-                f"일일 손실 한도 도달로 주문 중단 (pnl={pnl_pct:.2f}%, "
-                f"limit=-{daily_loss_limit_pct}%)"
-            )
-            logger.warning(message)
-            await publish_message(
-                TOPIC_ALERTS,
-                json.dumps(
-                    {
-                        "type": "circuit_breaker",
-                        "message": message,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
+        if not enabled_scopes:
+            message = "활성화된 주문 계좌가 없어 주문을 건너뜁니다."
             await set_heartbeat(self.agent_id)
             await insert_heartbeat(
                 AgentHeartbeatRecord(
                     agent_id=self.agent_id,
                     status="degraded",
                     last_action=message,
-                    metrics={"pnl_pct": round(pnl_pct, 3)},
+                    metrics={"enabled_scopes": 0},
                 )
             )
             return []
 
         orders: list[dict] = []
-        for signal in predictions:
-            order = await self.process_signal(
-                signal,
-                signal_source_override=signal_source_override,
-                risk_config=cfg,
-            )
-            if order:
-                orders.append(order)
+        blocked_scopes: list[dict[str, object]] = []
+        for account_scope in enabled_scopes:
+            blocked, pnl_pct = await self._is_daily_loss_blocked(account_scope, cfg)
+            if blocked:
+                await self._publish_circuit_breaker(account_scope, pnl_pct, daily_loss_limit_pct)
+                blocked_scopes.append({"account_scope": account_scope, "pnl_pct": round(pnl_pct, 3)})
+                continue
+
+            for signal in predictions:
+                order = await self.process_signal(
+                    signal,
+                    signal_source_override=signal_source_override,
+                    risk_config=cfg,
+                    account_scope_override=account_scope,
+                )
+                if order:
+                    orders.append(order)
+
+        hb_status = "healthy" if len(blocked_scopes) < len(enabled_scopes) else "degraded"
 
         await publish_message(
             TOPIC_ORDERS,
@@ -259,6 +279,8 @@ class PortfolioManagerAgent:
                     "type": "orders_executed",
                     "agent_id": self.agent_id,
                     "count": len(orders),
+                    "enabled_scopes": enabled_scopes,
+                    "blocked_scopes": blocked_scopes,
                     "orders": orders,
                     "timestamp_utc": datetime.utcnow().isoformat() + "Z",
                 },
@@ -270,9 +292,13 @@ class PortfolioManagerAgent:
         await insert_heartbeat(
             AgentHeartbeatRecord(
                 agent_id=self.agent_id,
-                status="healthy",
+                status=hb_status,
                 last_action=f"주문 처리 완료 ({len(orders)}건)",
-                metrics={"orders_executed": len(orders)},
+                metrics={
+                    "orders_executed": len(orders),
+                    "enabled_scopes": enabled_scopes,
+                    "blocked_scopes": blocked_scopes,
+                },
             )
         )
         logger.info("PortfolioManagerAgent 주문 처리 완료: %d건", len(orders))

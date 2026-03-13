@@ -28,7 +28,7 @@ TOPIC_ALERTS = "redis:topic:alerts"
 
 # ── Redis 키 패턴 상수 ──────────────────────────────────────────────────────
 KEY_HEARTBEAT = "heartbeat:{agent_id}"
-KEY_KIS_OAUTH_TOKEN = "kis:oauth_token"
+KEY_KIS_OAUTH_TOKEN = "kis:oauth_token:{scope}"
 KEY_KRX_HOLIDAYS = "krx:holidays:{year}"
 KEY_LATEST_TICKS = "redis:cache:latest_ticks:{ticker}"
 KEY_REALTIME_SERIES = "redis:cache:realtime_series:{ticker}"
@@ -79,6 +79,12 @@ async def set_heartbeat(agent_id: str, value: str = "1") -> None:
     redis = await get_redis()
     key = KEY_HEARTBEAT.format(agent_id=agent_id)
     await redis.set(key, value, ex=TTL_HEARTBEAT)
+
+
+def kis_oauth_token_key(scope: str) -> str:
+    """KIS OAuth 토큰 Redis 키를 계좌 scope별로 반환합니다."""
+    normalized = "real" if scope == "real" else "paper"
+    return KEY_KIS_OAUTH_TOKEN.format(scope=normalized)
 
 
 async def check_heartbeat(agent_id: str) -> bool:

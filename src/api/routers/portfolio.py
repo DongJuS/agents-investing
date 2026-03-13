@@ -164,7 +164,9 @@ class PortfolioConfigRequest(BaseModel):
 
 
 class TradingModeRequest(BaseModel):
-    is_paper: bool
+    enable_paper_trading: bool
+    enable_real_trading: bool
+    primary_account_scope: str = Field(pattern="^(paper|real)$")
     confirmation_code: str
 
 
@@ -198,6 +200,9 @@ class TradingModeAuditItem(BaseModel):
     requested_by_email: Optional[str] = None
     requested_by_user_id: Optional[str] = None
     requested_mode_is_paper: bool
+    requested_paper_enabled: bool
+    requested_real_enabled: bool
+    requested_primary_account_scope: str
     confirmation_code_ok: bool
     readiness_passed: bool
     readiness_summary: Optional[dict[str, Any]] = None
@@ -220,8 +225,27 @@ async def _resolve_mode_account_scope(mode: str) -> str:
     if mode == "real":
         return "real"
 
-    config = await fetchrow("SELECT is_paper_trading FROM portfolio_config LIMIT 1")
-    return normalize_account_scope("paper" if (bool(config["is_paper_trading"]) if config else True) else "real")
+    config = await fetchrow(
+        """
+        SELECT is_paper_trading, enable_paper_trading, enable_real_trading, primary_account_scope
+        FROM portfolio_config
+        LIMIT 1
+        """
+    )
+    if not config:
+        return "paper"
+    cfg = dict(config)
+
+    primary_scope = normalize_account_scope(cfg.get("primary_account_scope"))
+    if primary_scope == "paper" and bool(cfg.get("enable_paper_trading", True)):
+        return "paper"
+    if primary_scope == "real" and bool(cfg.get("enable_real_trading", False)):
+        return "real"
+    if bool(cfg.get("enable_paper_trading", True)):
+        return "paper"
+    if bool(cfg.get("enable_real_trading", False)):
+        return "real"
+    return normalize_account_scope("paper" if bool(cfg["is_paper_trading"]) else "real")
 
 
 def _period_to_days(period: str) -> int:
@@ -543,7 +567,14 @@ async def get_config(
     """현재 포트폴리오 운영 설정을 조회합니다."""
     row = await fetchrow(
         """
-        SELECT strategy_blend_ratio, max_position_pct, daily_loss_limit_pct, is_paper_trading
+        SELECT
+            strategy_blend_ratio,
+            max_position_pct,
+            daily_loss_limit_pct,
+            is_paper_trading,
+            enable_paper_trading,
+            enable_real_trading,
+            primary_account_scope
         FROM portfolio_config
         LIMIT 1
         """
@@ -554,8 +585,13 @@ async def get_config(
             "max_position_pct": 20,
             "daily_loss_limit_pct": 3,
             "is_paper_trading": True,
+            "enable_paper_trading": True,
+            "enable_real_trading": False,
+            "primary_account_scope": "paper",
         }
-    return dict(row)
+    payload = dict(row)
+    payload["is_paper_trading"] = normalize_account_scope(payload["primary_account_scope"]) == "paper"
+    return payload
 
 
 @router.post("/config")
@@ -585,18 +621,30 @@ async def update_trading_mode(
     admin_user: Annotated[dict, Depends(get_admin_user)],
     settings: Annotated[Settings, Depends(get_current_settings)],
 ) -> dict:
-    """페이퍼/실거래 모드를 전환합니다 (관리자 전용)."""
+    """페이퍼/실거래 실행 계좌를 업데이트합니다 (관리자 전용)."""
+    if not body.enable_paper_trading and not body.enable_real_trading:
+        return {"error": "paper 또는 real 중 최소 하나는 활성화해야 합니다."}
+
+    primary_scope = normalize_account_scope(body.primary_account_scope)
+    if primary_scope == "paper" and not body.enable_paper_trading:
+        return {"error": "primary_account_scope=paper 이면 paper 실행이 활성화되어야 합니다."}
+    if primary_scope == "real" and not body.enable_real_trading:
+        return {"error": "primary_account_scope=real 이면 real 실행이 활성화되어야 합니다."}
+
     confirmation_code_ok = body.confirmation_code == settings.real_trading_confirmation_code
     readiness = {"ready": True, "critical_ok": True, "high_ok": True, "checks": []}
 
-    if not body.is_paper:
+    if body.enable_real_trading:
         readiness = await evaluate_real_trading_readiness()
         if (not confirmation_code_ok) or (not readiness["ready"]):
-            message = "실거래 전환 차단: 확인 코드 또는 readiness 점검 실패"
+            message = "실거래 활성화 차단: 확인 코드 또는 readiness 점검 실패"
             await insert_real_trading_audit(
                 requested_by_email=admin_user.get("email"),
                 requested_by_user_id=admin_user.get("sub"),
-                requested_mode_is_paper=body.is_paper,
+                requested_mode_is_paper=(primary_scope == "paper"),
+                requested_paper_enabled=body.enable_paper_trading,
+                requested_real_enabled=body.enable_real_trading,
+                requested_primary_account_scope=primary_scope,
                 confirmation_code_ok=confirmation_code_ok,
                 readiness_passed=bool(readiness.get("ready")),
                 readiness_summary=readiness,
@@ -610,15 +658,33 @@ async def update_trading_mode(
             }
 
     await execute(
-        "UPDATE portfolio_config SET is_paper_trading = $1, updated_at = NOW()",
-        body.is_paper,
+        """
+        UPDATE portfolio_config
+        SET is_paper_trading = $1,
+            enable_paper_trading = $2,
+            enable_real_trading = $3,
+            primary_account_scope = $4,
+            updated_at = NOW()
+        """,
+        primary_scope == "paper",
+        body.enable_paper_trading,
+        body.enable_real_trading,
+        primary_scope,
     )
 
-    message = f"트레이딩 모드 변경 성공: {'paper' if body.is_paper else 'real'}"
+    message = (
+        "트레이딩 실행 계좌 변경 성공: "
+        f"paper={'on' if body.enable_paper_trading else 'off'}, "
+        f"real={'on' if body.enable_real_trading else 'off'}, "
+        f"primary={primary_scope}"
+    )
     await insert_real_trading_audit(
         requested_by_email=admin_user.get("email"),
         requested_by_user_id=admin_user.get("sub"),
-        requested_mode_is_paper=body.is_paper,
+        requested_mode_is_paper=(primary_scope == "paper"),
+        requested_paper_enabled=body.enable_paper_trading,
+        requested_real_enabled=body.enable_real_trading,
+        requested_primary_account_scope=primary_scope,
         confirmation_code_ok=confirmation_code_ok,
         readiness_passed=bool(readiness.get("ready")),
         readiness_summary=readiness,
@@ -626,8 +692,15 @@ async def update_trading_mode(
         message=message,
     )
 
-    mode = "페이퍼 트레이딩" if body.is_paper else "실거래"
-    return {"message": f"트레이딩 모드가 '{mode}'으로 변경되었습니다.", "readiness": readiness}
+    current = "페이퍼 우선" if primary_scope == "paper" else "실거래 우선"
+    return {
+        "message": (
+            f"실행 계좌 설정이 저장되었습니다. "
+            f"(paper={'on' if body.enable_paper_trading else 'off'}, "
+            f"real={'on' if body.enable_real_trading else 'off'}, primary={current})"
+        ),
+        "readiness": readiness,
+    }
 
 
 @router.get("/readiness", response_model=ReadinessResponse)

@@ -4,6 +4,8 @@ src/utils/config.py — 환경 변수 중앙 설정 관리
 Pydantic v2 Settings로 모든 환경 변수를 타입-안전하게 로드합니다.
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
 
 from pydantic import Field
@@ -45,8 +47,15 @@ class Settings(BaseSettings):
     kis_app_key: str = Field(default="", alias="KIS_APP_KEY")
     kis_app_secret: str = Field(default="", alias="KIS_APP_SECRET")
     kis_account_number: str = Field(default="", alias="KIS_ACCOUNT_NUMBER")
+    kis_paper_app_key: str = Field(default="", alias="KIS_PAPER_APP_KEY")
+    kis_paper_app_secret: str = Field(default="", alias="KIS_PAPER_APP_SECRET")
+    kis_paper_account_number: str = Field(default="", alias="KIS_PAPER_ACCOUNT_NUMBER")
+    kis_real_app_key: str = Field(default="", alias="KIS_REAL_APP_KEY")
+    kis_real_app_secret: str = Field(default="", alias="KIS_REAL_APP_SECRET")
+    kis_real_account_number: str = Field(default="", alias="KIS_REAL_ACCOUNT_NUMBER")
     kis_is_paper_trading: bool = Field(default=True, alias="KIS_IS_PAPER_TRADING")
     paper_broker_backend: str = Field(default="internal", alias="PAPER_BROKER_BACKEND")
+    real_broker_backend: str = Field(default="kis", alias="REAL_BROKER_BACKEND")
     kis_request_timeout_seconds: int = Field(default=15, ge=5, le=60, alias="KIS_REQUEST_TIMEOUT_SECONDS")
 
     # ── Telegram ─────────────────────────────────────────────────────────────
@@ -111,8 +120,47 @@ class Settings(BaseSettings):
             return "ws://ops.koreainvestment.com:31000"
         return "ws://ops.koreainvestment.com:21000"
 
+    def kis_app_key_for_scope(self, account_scope: str) -> str:
+        if account_scope == "real":
+            return self.kis_real_app_key or self.kis_app_key
+        return self.kis_paper_app_key or self.kis_app_key
+
+    def kis_app_secret_for_scope(self, account_scope: str) -> str:
+        if account_scope == "real":
+            return self.kis_real_app_secret or self.kis_app_secret
+        return self.kis_paper_app_secret or self.kis_app_secret
+
+    def kis_account_number_for_scope(self, account_scope: str) -> str:
+        if account_scope == "real":
+            return self.kis_real_account_number or self.kis_account_number
+        return self.kis_paper_account_number or self.kis_account_number
+
 
 @lru_cache
 def get_settings() -> Settings:
     """앱 전체에서 싱글턴으로 사용하는 설정 인스턴스를 반환합니다."""
     return Settings()
+
+
+def kis_app_key_for_scope(settings: Settings | object, account_scope: str) -> str:
+    if hasattr(settings, "kis_app_key_for_scope"):
+        return settings.kis_app_key_for_scope(account_scope)  # type: ignore[attr-defined]
+    if account_scope == "real":
+        return getattr(settings, "kis_real_app_key", "") or getattr(settings, "kis_app_key", "")
+    return getattr(settings, "kis_paper_app_key", "") or getattr(settings, "kis_app_key", "")
+
+
+def kis_app_secret_for_scope(settings: Settings | object, account_scope: str) -> str:
+    if hasattr(settings, "kis_app_secret_for_scope"):
+        return settings.kis_app_secret_for_scope(account_scope)  # type: ignore[attr-defined]
+    if account_scope == "real":
+        return getattr(settings, "kis_real_app_secret", "") or getattr(settings, "kis_app_secret", "")
+    return getattr(settings, "kis_paper_app_secret", "") or getattr(settings, "kis_app_secret", "")
+
+
+def kis_account_number_for_scope(settings: Settings | object, account_scope: str) -> str:
+    if hasattr(settings, "kis_account_number_for_scope"):
+        return settings.kis_account_number_for_scope(account_scope)  # type: ignore[attr-defined]
+    if account_scope == "real":
+        return getattr(settings, "kis_real_account_number", "") or getattr(settings, "kis_account_number", "")
+    return getattr(settings, "kis_paper_account_number", "") or getattr(settings, "kis_account_number", "")

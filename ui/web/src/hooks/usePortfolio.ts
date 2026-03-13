@@ -61,10 +61,15 @@ export interface PortfolioConfig {
   max_position_pct: number;
   daily_loss_limit_pct: number;
   is_paper_trading: boolean;
+  enable_paper_trading: boolean;
+  enable_real_trading: boolean;
+  primary_account_scope: "paper" | "real";
 }
 
 export interface TradingModePayload {
-  is_paper: boolean;
+  enable_paper_trading: boolean;
+  enable_real_trading: boolean;
+  primary_account_scope: "paper" | "real";
   confirmation_code: string;
 }
 
@@ -313,7 +318,7 @@ export function useAccountSnapshots(mode: TradingScope = "current", limit = 30) 
 export function useUpdatePortfolioConfig() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: Omit<PortfolioConfig, "is_paper_trading">) => {
+    mutationFn: async (payload: Pick<PortfolioConfig, "strategy_blend_ratio" | "max_position_pct" | "daily_loss_limit_pct">) => {
       const { data } = await api.post("/portfolio/config", payload);
       return data;
     },

@@ -73,7 +73,8 @@ class OrchestratorAgent:
 
         rows = await fetch(
             """
-            SELECT agent_id, llm_model, strategy, ticker, signal,
+            SELECT DISTINCT ON (ticker)
+                   agent_id, llm_model, strategy, ticker, signal,
                    confidence::float AS confidence, target_price, stop_loss,
                    reasoning_summary, trading_date
             FROM predictions
@@ -81,6 +82,7 @@ class OrchestratorAgent:
               AND agent_id = $1
               AND trading_date = $2
               AND ticker = ANY($3::text[])
+            ORDER BY ticker, timestamp_utc DESC, id DESC
             """,
             winner_agent_id,
             date.today(),

@@ -76,13 +76,15 @@ async def check_redis() -> tuple[bool, str]:
 
 async def check_kis_token() -> tuple[bool, str]:
     """Redis에 저장된 KIS 토큰 상태를 확인합니다."""
-    from src.utils.redis_client import KEY_KIS_OAUTH_TOKEN, close_redis, get_redis
+    from src.utils.redis_client import close_redis, get_redis, kis_oauth_token_key
     import json
 
     try:
         redis = await get_redis()
-        raw = await redis.get(KEY_KIS_OAUTH_TOKEN)
-        ttl = await redis.ttl(KEY_KIS_OAUTH_TOKEN)
+        scope = "paper" if settings.kis_is_paper_trading else "real"
+        token_key = kis_oauth_token_key(scope)
+        raw = await redis.get(token_key)
+        ttl = await redis.ttl(token_key)
         await close_redis()
 
         if not raw:
