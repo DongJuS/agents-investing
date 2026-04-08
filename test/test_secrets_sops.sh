@@ -131,8 +131,16 @@ make_fake_repo() {
   mkdir -p "$fake/k8s/scripts" "$fake/k8s/secrets"
   cp "$REPO_ROOT/k8s/scripts/secrets-bootstrap.sh" "$fake/k8s/scripts/"
   chmod +x "$fake/k8s/scripts/secrets-bootstrap.sh"
-  # placeholder 가 들어간 .sops.yaml 을 그대로 복사 (bootstrap 이 치환하는지 확인하기 위함)
-  cp "$REPO_ROOT/.sops.yaml" "$fake/.sops.yaml"
+  # 항상 placeholder 가 들어간 .sops.yaml 을 직접 작성한다.
+  # (운영자가 이미 부트스트랩을 돌려 실제 repo 의 .sops.yaml 이 진짜 recipient 로
+  #  치환된 상태여도 hermetic 테스트가 영향받지 않도록 — cp 하면 안 됨.)
+  cat > "$fake/.sops.yaml" <<'EOF'
+creation_rules:
+  - path_regex: k8s/secrets/.*\.enc\.yaml$
+    encrypted_regex: '^(data|stringData)$'
+    age: >-
+      age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+EOF
 }
 
 # ── 테스트 케이스들 ──────────────────────────────────────────────────

@@ -60,6 +60,10 @@ if [ ! -f "$AGE_KEY_FILE" ]; then
   echo "         k8s/scripts/secrets-bootstrap.sh 를 먼저 실행하세요." >&2
   exit 1
 fi
+# sops 자식 프로세스에 키 위치를 명시 전달.
+# macOS sops 의 기본 키 위치는 ~/Library/Application Support/sops/age/keys.txt 인데
+# 우리 부트스트랩은 ~/.config/sops/age/keys.txt (XDG 스타일) 에 쓰므로 export 필수.
+export SOPS_AGE_KEY_FILE="$AGE_KEY_FILE"
 
 shopt -s nullglob
 SECRET_FILES=(k8s/secrets/*.enc.yaml)
