@@ -468,6 +468,123 @@ EOF
   return "$rc"
 }
 
+# 9b. bool/int 처럼 보이는 값은 YAML string 으로 quote 되어야 한다
+#     (kubectl Secret stringData 는 string-only — 'true', '8203915188' 같은 값이
+#      bool/int 으로 자동 추론되면 'cannot convert int64 to string' 으로 거절됨.
+#      2026-04-08 운영자의 첫 deploy 시도에서 KIS_IS_PAPER_TRADING / TELEGRAM_CHAT_ID
+#      가 정확히 이 이유로 거절됐음 — 회귀 방지)
+test_secrets_bootstrap_quotes_bool_and_int_values() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+
+  cat > "$fake/.env" <<'EOF'
+JWT_SECRET=hermetic-jwt
+DATABASE_URL=postgresql://u:p@host/db
+KIS_IS_PAPER_TRADING=true
+TELEGRAM_BOT_TOKEN=hermetic-token
+TELEGRAM_CHAT_ID=8203915188
+EOF
+
+  local rc=0
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$fake/log" 2>&1
+  local code=$?
+  set -e
+  if [ "$code" != "0" ]; then
+    echo "    bootstrap run failed (exit $code):"
+    sed 's/^/      /' "$fake/log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  local enc_path="$fake/k8s/secrets/app-secret.enc.yaml"
+  local plain="$fake/decrypted.yaml"
+  SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$enc_path" > "$plain" 2>/dev/null
+
+  # 'true' 와 '8203915188' 모두 single-quoted YAML scalar 여야 함.
+  # awk 로 KIS_IS_PAPER_TRADING / TELEGRAM_CHAT_ID 의 값을 뽑아 ' 로 시작/끝나는지 검사.
+  for key in KIS_IS_PAPER_TRADING TELEGRAM_CHAT_ID; do
+    local raw
+    raw="$(grep -E "^[[:space:]]*${key}:" "$plain" | sed -E "s/^[[:space:]]*${key}:[[:space:]]*//")"
+    if [ -z "$raw" ]; then
+      echo "    $key missing from decrypted ENC"
+      rc=1
+      continue
+    fi
+    # YAML quoted scalar 여야 한다 (' 또는 " 로 감싸짐)
+    if ! printf '%s' "$raw" | grep -Eq "^['\"].*['\"]\$"; then
+      echo "    $key value '$raw' not YAML-quoted (would be parsed as bool/int)"
+      rc=1
+    fi
+  done
+
+  # kubectl 이 실제로 받아들이는지 dry-run 으로 검증 (kubectl 있을 때만).
+  # client-side dry-run 은 cluster 접속 없이 schema validation 만 한다.
+  if command -v kubectl >/dev/null 2>&1; then
+    if ! SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$enc_path" \
+         | kubectl apply --dry-run=client -f - >"$fake/dryrun.log" 2>&1; then
+      echo "    kubectl --dry-run=client rejected the decrypted secret:"
+      sed 's/^/      /' "$fake/dryrun.log" | head -10
+      rc=1
+    fi
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
+# 9c. DATABASE_URL 의 localhost 가 k8s service DNS 로 치환되는지
+test_secrets_bootstrap_rewrites_database_url_localhost() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+
+  cat > "$fake/.env" <<'EOF'
+JWT_SECRET=hermetic-jwt
+DATABASE_URL=postgresql://alpha_user:hermetic-pass@localhost:5432/alpha_db
+EOF
+
+  local rc=0
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$fake/log" 2>&1
+  local code=$?
+  set -e
+  if [ "$code" != "0" ]; then
+    echo "    bootstrap run failed (exit $code):"
+    sed 's/^/      /' "$fake/log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  local plain="$fake/decrypted.yaml"
+  SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$fake/k8s/secrets/app-secret.enc.yaml" > "$plain" 2>/dev/null
+
+  if grep -q '@localhost' "$plain"; then
+    echo "    DATABASE_URL still contains @localhost (should be rewritten to alpha-pg-postgresql)"
+    grep DATABASE_URL "$plain" | sed 's/^/      /'
+    rc=1
+  fi
+  if ! grep -q '@alpha-pg-postgresql:5432/' "$plain"; then
+    echo "    DATABASE_URL does not contain @alpha-pg-postgresql:5432/ after rewrite"
+    grep DATABASE_URL "$plain" | sed 's/^/      /'
+    rc=1
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
 # 10. 암호화 후에도 metadata/kind/type 은 평문이고 stringData.* 는 ENC[...] 로 가려졌는지
 test_sops_yaml_encrypted_regex_only_hits_data_fields() {
   setup_env
@@ -516,7 +633,7 @@ run_test() {
 
 main() {
   check_binaries
-  echo "=== SOPS pipeline unit tests (10 cases) ==="
+  echo "=== SOPS pipeline unit tests (12 cases) ==="
   echo ""
   run_test test_sops_config_has_valid_recipient
   run_test test_app_secret_decrypts_round_trip
@@ -527,6 +644,8 @@ main() {
   run_test test_deploy_script_aborts_without_sops_binary
   run_test test_secrets_bootstrap_is_idempotent
   run_test test_secrets_bootstrap_skips_empty_env_keys
+  run_test test_secrets_bootstrap_quotes_bool_and_int_values
+  run_test test_secrets_bootstrap_rewrites_database_url_localhost
   run_test test_sops_yaml_encrypted_regex_only_hits_data_fields
   echo ""
   local total=$((PASS + FAIL))

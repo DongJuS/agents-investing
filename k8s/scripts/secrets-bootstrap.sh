@@ -93,9 +93,19 @@ YAML
     val="${val#\"}"
     val="${val%\'}"
     val="${val#\'}"
-    if [ -n "$val" ]; then
-      printf '  %s: %s\n' "$key" "$val" >> "$TMP"
+    if [ -z "$val" ]; then
+      continue
     fi
+    # DATABASE_URL 의 host 가 localhost / 127.0.0.1 이면 k8s 컨텍스트의
+    # 서비스 DNS 로 치환한다. .env 는 로컬 개발용이라 localhost 가 박혀 있지만
+    # k8s 안에서는 alpha-pg-postgresql 서비스로 가야 한다.
+    if [ "$key" = "DATABASE_URL" ]; then
+      val="$(printf '%s' "$val" | sed -E 's#@(localhost|127\.0\.0\.1)(:[0-9]+)?/#@alpha-pg-postgresql:5432/#')"
+    fi
+    # YAML 의 single-quoted scalar 로 출력해 string 타입 강제 (true / 8203915188
+    # 같은 값이 bool/int 로 자동 추론되지 않게). single-quote 자체는 두 개로 escape.
+    escaped="${val//\'/\'\'}"
+    printf "  %s: '%s'\n" "$key" "$escaped" >> "$TMP"
   done
 
   # sops 의 creation_rules 매칭은 --filename-override 로 가짜 경로를 넘겨 한다
