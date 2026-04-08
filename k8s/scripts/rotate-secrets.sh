@@ -45,6 +45,20 @@ for arg in "$@"; do
   esac
 done
 
+# ── 비대화형 / 검증 hook 환경변수 ───────────────────────────────────
+# test/test_secrets_sops.sh 의 hermetic 단위 테스트가 실제 postgres/kubectl/docker
+# 없이 rotation 흐름 전체를 end-to-end 로 검증할 때 사용한다. 운영자는 이
+# 변수들을 절대 직접 export 하지 말 것 (secret 입력이 컨텍스트에 노출됨).
+#   ROTATE_NON_INTERACTIVE=1  → KIS/Telegram 입력을 ROTATE_* 환경변수에서 읽음
+#   ROTATE_SKIP_CONFIRM=1     → 'yes' 확인 프롬프트 스킵
+#   ROTATE_SKIP_POSTGRES=1    → postgres pod 사전검증 + ALTER USER 스킵
+#                                (DATABASE_URL 의 비번은 그대로 유지)
+#   ROTATE_SKIP_DEPLOY=1      → deploy-local.sh 호출 + api pod 검증 스킵
+ROTATE_NON_INTERACTIVE="${ROTATE_NON_INTERACTIVE:-0}"
+ROTATE_SKIP_CONFIRM="${ROTATE_SKIP_CONFIRM:-0}"
+ROTATE_SKIP_POSTGRES="${ROTATE_SKIP_POSTGRES:-0}"
+ROTATE_SKIP_DEPLOY="${ROTATE_SKIP_DEPLOY:-0}"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
@@ -63,23 +77,34 @@ fail()         { printf '%s %s\n' "$(color_red 'ERROR:')" "$1" >&2; exit 1; }
 # ── 0. 사전 검증 ────────────────────────────────────────────────────
 say "[0/11] 사전 검증"
 
-for bin in sops age age-keygen kubectl openssl python3; do
+REQUIRED_BINS=(sops age age-keygen openssl python3)
+if [ "$ROTATE_SKIP_POSTGRES" != "1" ] || [ "$ROTATE_SKIP_DEPLOY" != "1" ]; then
+  REQUIRED_BINS+=(kubectl)
+fi
+for bin in "${REQUIRED_BINS[@]}"; do
   command -v "$bin" >/dev/null 2>&1 || fail "$bin 미설치 ('brew install sops age kubectl openssl' 후 재시도)"
 done
 [ -f "$ENV_FILE" ] || fail "$ENV_FILE 가 없습니다"
 [ -f "$REPO_ROOT/.sops.yaml" ] || fail ".sops.yaml 가 없습니다 — 먼저 secrets-bootstrap.sh 한 번 돌렸는지 확인"
 [ -x "$SCRIPT_DIR/secrets-bootstrap.sh" ] || fail "$SCRIPT_DIR/secrets-bootstrap.sh 미존재 또는 실행 권한 없음"
-[ -x "$SCRIPT_DIR/deploy-local.sh" ]      || fail "$SCRIPT_DIR/deploy-local.sh 미존재 또는 실행 권한 없음"
+if [ "$ROTATE_SKIP_DEPLOY" != "1" ]; then
+  [ -x "$SCRIPT_DIR/deploy-local.sh" ] || fail "$SCRIPT_DIR/deploy-local.sh 미존재 또는 실행 권한 없음"
+fi
 
 # postgres pod 존재 + 살아있음 확인 (이름은 동적으로 찾는다)
-PG_POD="$(kubectl get pod -n "$NAMESPACE" -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-if [ -z "$PG_POD" ]; then
-  PG_POD="$(kubectl get pod -n "$NAMESPACE" -o name 2>/dev/null | grep -E 'postgresql|postgres' | head -1 | sed 's|pod/||' || true)"
+PG_POD=""
+if [ "$ROTATE_SKIP_POSTGRES" = "1" ]; then
+  say "  postgres 사전 검증 스킵 (ROTATE_SKIP_POSTGRES=1)"
+else
+  PG_POD="$(kubectl get pod -n "$NAMESPACE" -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -z "$PG_POD" ]; then
+    PG_POD="$(kubectl get pod -n "$NAMESPACE" -o name 2>/dev/null | grep -E 'postgresql|postgres' | head -1 | sed 's|pod/||' || true)"
+  fi
+  [ -n "$PG_POD" ] || fail "namespace $NAMESPACE 에서 postgres pod 를 찾지 못했습니다"
+  PG_PHASE="$(kubectl get pod "$PG_POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  [ "$PG_PHASE" = "Running" ] || fail "postgres pod ($PG_POD) 가 Running 상태가 아닙니다 (현재: $PG_PHASE)"
+  say "  postgres pod: $PG_POD ($PG_PHASE)"
 fi
-[ -n "$PG_POD" ] || fail "namespace $NAMESPACE 에서 postgres pod 를 찾지 못했습니다"
-PG_PHASE="$(kubectl get pod "$PG_POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-[ "$PG_PHASE" = "Running" ] || fail "postgres pod ($PG_POD) 가 Running 상태가 아닙니다 (현재: $PG_PHASE)"
-say "  postgres pod: $PG_POD ($PG_PHASE)"
 
 # .sops.yaml 의 recipient 가 placeholder 가 아닌지 확인
 if grep -q 'age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' "$REPO_ROOT/.sops.yaml"; then
@@ -106,15 +131,17 @@ EOF
   exit 0
 fi
 
-echo ""
-warn "이 스크립트는 다음을 강제로 변경합니다:"
-echo "  - JWT_SECRET (재생성)"
-echo "  - postgres alpha_user 비밀번호 (ALTER USER + .env 동기화)"
-echo "  - 입력한 KIS / Telegram 키 (사용자가 Enter 안 친 항목)"
-echo ""
-printf "계속 진행할까요? [yes 입력 시 진행, 그 외 중단]: "
-read -r CONFIRM
-[ "$CONFIRM" = "yes" ] || fail "사용자가 중단했습니다"
+if [ "$ROTATE_SKIP_CONFIRM" != "1" ]; then
+  echo ""
+  warn "이 스크립트는 다음을 강제로 변경합니다:"
+  echo "  - JWT_SECRET (재생성)"
+  echo "  - postgres alpha_user 비밀번호 (ALTER USER + .env 동기화)"
+  echo "  - 입력한 KIS / Telegram 키 (사용자가 Enter 안 친 항목)"
+  echo ""
+  printf "계속 진행할까요? [yes 입력 시 진행, 그 외 중단]: "
+  read -r CONFIRM
+  [ "$CONFIRM" = "yes" ] || fail "사용자가 중단했습니다"
+fi
 
 # ── 1. .env 백업 ────────────────────────────────────────────────────
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
@@ -124,24 +151,37 @@ chmod 600 "$BACKUP_FILE"
 say "[1/11] .env 백업: $BACKUP_FILE (chmod 600)"
 
 # ── 2-4. KIS / Telegram 새 값 수집 ─────────────────────────────────
-say "[2/11] KIS PAPER 키 입력 (Enter 시 현재값 유지)"
-echo "  → KIS Developers 포털 → 모의투자 앱 → 키 재발급 후 붙여넣기"
-printf "  KIS_PAPER_APP_KEY     : "
-read -rs KIS_PAPER_APP_KEY_NEW; echo
-printf "  KIS_PAPER_APP_SECRET  : "
-read -rs KIS_PAPER_APP_SECRET_NEW; echo
+if [ "$ROTATE_NON_INTERACTIVE" = "1" ]; then
+  say "[2/11] KIS PAPER 키 (ROTATE_KIS_PAPER_* 환경변수에서 읽음)"
+  KIS_PAPER_APP_KEY_NEW="${ROTATE_KIS_PAPER_APP_KEY:-}"
+  KIS_PAPER_APP_SECRET_NEW="${ROTATE_KIS_PAPER_APP_SECRET:-}"
 
-say "[3/11] KIS REAL 키 입력 (Enter 시 현재값 유지)"
-echo "  → KIS Developers 포털 → 실거래 앱 → 키 재발급 후 붙여넣기"
-printf "  KIS_REAL_APP_KEY      : "
-read -rs KIS_REAL_APP_KEY_NEW; echo
-printf "  KIS_REAL_APP_SECRET   : "
-read -rs KIS_REAL_APP_SECRET_NEW; echo
+  say "[3/11] KIS REAL 키 (ROTATE_KIS_REAL_* 환경변수에서 읽음)"
+  KIS_REAL_APP_KEY_NEW="${ROTATE_KIS_REAL_APP_KEY:-}"
+  KIS_REAL_APP_SECRET_NEW="${ROTATE_KIS_REAL_APP_SECRET:-}"
 
-say "[4/11] Telegram BOT TOKEN 입력 (Enter 시 현재값 유지)"
-echo "  → @BotFather → /revoke → /newtoken → 봇 선택 후 붙여넣기"
-printf "  TELEGRAM_BOT_TOKEN    : "
-read -rs TELEGRAM_BOT_TOKEN_NEW; echo
+  say "[4/11] Telegram BOT TOKEN (ROTATE_TELEGRAM_BOT_TOKEN 환경변수에서 읽음)"
+  TELEGRAM_BOT_TOKEN_NEW="${ROTATE_TELEGRAM_BOT_TOKEN:-}"
+else
+  say "[2/11] KIS PAPER 키 입력 (Enter 시 현재값 유지)"
+  echo "  → KIS Developers 포털 → 모의투자 앱 → 키 재발급 후 붙여넣기"
+  printf "  KIS_PAPER_APP_KEY     : "
+  read -rs KIS_PAPER_APP_KEY_NEW; echo
+  printf "  KIS_PAPER_APP_SECRET  : "
+  read -rs KIS_PAPER_APP_SECRET_NEW; echo
+
+  say "[3/11] KIS REAL 키 입력 (Enter 시 현재값 유지)"
+  echo "  → KIS Developers 포털 → 실거래 앱 → 키 재발급 후 붙여넣기"
+  printf "  KIS_REAL_APP_KEY      : "
+  read -rs KIS_REAL_APP_KEY_NEW; echo
+  printf "  KIS_REAL_APP_SECRET   : "
+  read -rs KIS_REAL_APP_SECRET_NEW; echo
+
+  say "[4/11] Telegram BOT TOKEN 입력 (Enter 시 현재값 유지)"
+  echo "  → @BotFather → /revoke → /newtoken → 봇 선택 후 붙여넣기"
+  printf "  TELEGRAM_BOT_TOKEN    : "
+  read -rs TELEGRAM_BOT_TOKEN_NEW; echo
+fi
 
 # ── 5. JWT_SECRET 재생성 ───────────────────────────────────────────
 say "[5/11] JWT_SECRET 재생성"
@@ -149,26 +189,32 @@ JWT_SECRET_NEW="$(openssl rand -hex 32)"
 echo "  ✓ 새 JWT_SECRET 생성 (값은 출력되지 않음)"
 
 # ── 6. postgres 비밀번호 재생성 + ALTER USER ──────────────────────
-say "[6/11] postgres alpha_user 비밀번호 재생성 + ALTER USER"
-PG_PW_NEW="$(openssl rand -hex 24)"
-echo "  새 비번 생성. ALTER USER 실행..."
-if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
-     psql -U postgres -d alpha_db -v ON_ERROR_STOP=1 \
-     -c "ALTER USER alpha_user PASSWORD '$PG_PW_NEW'" >/dev/null 2>&1; then
-  unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
-        KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
-  fail "ALTER USER 실패. 원래 .env 그대로. 백업: $BACKUP_FILE"
-fi
+PG_PW_NEW=""
+if [ "$ROTATE_SKIP_POSTGRES" = "1" ]; then
+  say "[6/11] postgres ALTER USER 스킵 (ROTATE_SKIP_POSTGRES=1)"
+  echo "  → DATABASE_URL 의 비번은 변경되지 않습니다"
+else
+  say "[6/11] postgres alpha_user 비밀번호 재생성 + ALTER USER"
+  PG_PW_NEW="$(openssl rand -hex 24)"
+  echo "  새 비번 생성. ALTER USER 실행..."
+  if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
+       psql -U postgres -d alpha_db -v ON_ERROR_STOP=1 \
+       -c "ALTER USER alpha_user PASSWORD '$PG_PW_NEW'" >/dev/null 2>&1; then
+    unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
+          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
+    fail "ALTER USER 실패. 원래 .env 그대로. 백업: $BACKUP_FILE"
+  fi
 
-# 새 비번이 실제로 통하는지 검증
-if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
-     env "PGPASSWORD=$PG_PW_NEW" psql -h localhost -U alpha_user -d alpha_db \
-     -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
-  unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
-        KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
-  fail "ALTER USER 후 새 비번 검증 실패. 수동 복구 필요. 백업: $BACKUP_FILE"
+  # 새 비번이 실제로 통하는지 검증
+  if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
+       env "PGPASSWORD=$PG_PW_NEW" psql -h localhost -U alpha_user -d alpha_db \
+       -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
+    unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
+          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
+    fail "ALTER USER 후 새 비번 검증 실패. 수동 복구 필요. 백업: $BACKUP_FILE"
+  fi
+  echo "  ✓ ALTER USER 성공 + 새 비번 검증 OK"
 fi
-echo "  ✓ ALTER USER 성공 + 새 비번 검증 OK"
 
 # ── 7. .env 원자적 업데이트 ────────────────────────────────────────
 say "[7/11] .env 원자적 업데이트"
@@ -222,11 +268,12 @@ for line in lines:
             break
     if matched:
         continue
-    m = db_url_re.match(stripped)
-    if m:
-        new_lines.append(f"{m.group(1)}{pg_pw_new}{m.group(2)}\n")
-        seen.add("DATABASE_URL")
-        continue
+    if pg_pw_new:
+        m = db_url_re.match(stripped)
+        if m:
+            new_lines.append(f"{m.group(1)}{pg_pw_new}{m.group(2)}\n")
+            seen.add("DATABASE_URL")
+            continue
     new_lines.append(line)
 
 # 원래 .env 에 없던 키는 끝에 append
@@ -272,25 +319,33 @@ say "[9/11] secrets-bootstrap.sh 실행"
 bash "$SCRIPT_DIR/secrets-bootstrap.sh"
 
 # ── 10. deploy-local.sh 실행 ──────────────────────────────────────
-say "[10/11] deploy-local.sh 실행"
-bash "$SCRIPT_DIR/deploy-local.sh"
+if [ "$ROTATE_SKIP_DEPLOY" = "1" ]; then
+  say "[10/11] deploy-local.sh 스킵 (ROTATE_SKIP_DEPLOY=1)"
+else
+  say "[10/11] deploy-local.sh 실행"
+  bash "$SCRIPT_DIR/deploy-local.sh"
+fi
 
 # ── 11. api pod 검증 ──────────────────────────────────────────────
-say "[11/11] api pod 검증"
-sleep 5
-if ! kubectl rollout status deployment/api -n "$NAMESPACE" --timeout=180s; then
-  warn "api rollout 미완료 — 'kubectl logs deploy/api -n $NAMESPACE --tail=50' 로 확인하세요"
-  exit 1
-fi
-echo ""
-echo "── api pod 최근 로그 (5줄) ──"
-kubectl logs deployment/api -n "$NAMESPACE" --tail=5 2>/dev/null | sed 's/^/  /' || true
-echo ""
+if [ "$ROTATE_SKIP_DEPLOY" = "1" ]; then
+  say "[11/11] api pod 검증 스킵 (ROTATE_SKIP_DEPLOY=1)"
+else
+  say "[11/11] api pod 검증"
+  sleep 5
+  if ! kubectl rollout status deployment/api -n "$NAMESPACE" --timeout=180s; then
+    warn "api rollout 미완료 — 'kubectl logs deploy/api -n $NAMESPACE --tail=50' 로 확인하세요"
+    exit 1
+  fi
+  echo ""
+  echo "── api pod 최근 로그 (5줄) ──"
+  kubectl logs deployment/api -n "$NAMESPACE" --tail=5 2>/dev/null | sed 's/^/  /' || true
+  echo ""
 
-# DB 연결 에러 검출
-if kubectl logs deployment/api -n "$NAMESPACE" --tail=200 2>/dev/null \
-   | grep -qiE 'InvalidPasswordError|password authentication failed'; then
-  fail "api 로그에 InvalidPasswordError 가 여전히 보입니다 — 수동 확인 필요"
+  # DB 연결 에러 검출
+  if kubectl logs deployment/api -n "$NAMESPACE" --tail=200 2>/dev/null \
+     | grep -qiE 'InvalidPasswordError|password authentication failed'; then
+    fail "api 로그에 InvalidPasswordError 가 여전히 보입니다 — 수동 확인 필요"
+  fi
 fi
 
 # ── 최종 요약 ─────────────────────────────────────────────────────

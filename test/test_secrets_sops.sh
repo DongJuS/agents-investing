@@ -2,7 +2,7 @@
 # shellcheck disable=SC2329
 # (test_*/setup_env/teardown_env/make_fake_repo 는 run_test 의 첫 인자
 #  문자열을 통해 간접 호출되어 shellcheck 가 추적하지 못하므로 SC2329 를 끈다.)
-# test/test_secrets_sops.sh — SOPS + age 파이프라인 단위 테스트 (10 cases)
+# test/test_secrets_sops.sh — SOPS + age 파이프라인 단위 테스트 (14 cases)
 #
 # 본 테스트는 hermetic: 운영자의 ~/.config/sops/age/keys.txt 와
 # k8s/secrets/app-secret.enc.yaml 을 절대 읽지/쓰지 않는다. 모든 케이스가
@@ -607,6 +607,164 @@ test_rotate_secrets_help_exits_zero() {
   return "$rc"
 }
 
+# 9e. rotate-secrets.sh end-to-end (hermetic — postgres/kubectl/docker 없이)
+#
+#  검증 hook: ROTATE_NON_INTERACTIVE / ROTATE_SKIP_CONFIRM /
+#             ROTATE_SKIP_POSTGRES / ROTATE_SKIP_DEPLOY 환경변수로
+#             rotation 전 흐름을 가짜 repo 에서 돌려본다. 운영자는
+#             이 변수들을 절대 직접 export 하면 안 됨 (테스트 전용).
+#
+#  검증 항목:
+#    1. exit 0
+#    2. .env JWT_SECRET 이 64 hex 로 새로 생성됨 (원본과 다름)
+#    3. .env KIS_PAPER_APP_KEY 가 ROTATE_KIS_PAPER_APP_KEY 값으로 갱신됨
+#    4. ROTATE_KIS_REAL_APP_KEY 가 빈 문자열일 때 .env 에 추가되지 않음
+#    5. ROTATE_SKIP_POSTGRES=1 이면 .env DATABASE_URL 의 비번이 보존됨
+#    6. .env.bak.* 백업 파일이 생성됨
+#    7. 새 app-secret.enc.yaml 이 만들어지고 sops --decrypt 가 성공함
+#    8. decrypted ENC 에 새 KIS 값이 들어 있고 원래 값은 leak 되지 않음
+test_rotate_secrets_end_to_end_hermetic() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  # rotate-secrets.sh 도 가짜 repo 의 k8s/scripts/ 에 복사
+  cp "$REPO_ROOT/k8s/scripts/rotate-secrets.sh" "$fake/k8s/scripts/"
+  chmod +x "$fake/k8s/scripts/rotate-secrets.sh"
+
+  # hermetic age key
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+
+  # 초기 .env (rotate 전 값) — 일부러 localhost 그대로 둬서 ROTATE_SKIP_POSTGRES
+  # 시 DATABASE_URL 보존을 검증한다
+  cat > "$fake/.env" <<'EOF'
+JWT_SECRET=hermetic-original-jwt
+DATABASE_URL=postgresql://alpha_user:hermetic-original-pass@localhost:5432/alpha_db
+S3_ACCESS_KEY=hermetic-s3
+S3_SECRET_KEY=hermetic-s3-secret
+KIS_PAPER_APP_KEY=hermetic-original-paper-key
+KIS_PAPER_APP_SECRET=hermetic-original-paper-secret
+KIS_IS_PAPER_TRADING=true
+TELEGRAM_BOT_TOKEN=hermetic-original-telegram
+TELEGRAM_CHAT_ID=8203915188
+EOF
+
+  local rc=0
+
+  # ── 1) 초기 부트스트랩 (rotate 의 .sops.yaml placeholder pre-check 통과용) ──
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$fake/bootstrap1.log" 2>&1
+  local bcode=$?
+  set -e
+  if [ "$bcode" != "0" ]; then
+    echo "    initial bootstrap failed (exit $bcode):"
+    sed 's/^/      /' "$fake/bootstrap1.log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  # 원본 JWT 캡처 (rotate 후 다른지 확인용)
+  local original_jwt
+  original_jwt="$(grep '^JWT_SECRET=' "$fake/.env" | cut -d= -f2-)"
+
+  # ── 2) rotate 실행 (모든 skip 플래그 + 새 KIS 값 주입) ──
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" \
+  ROTATE_NON_INTERACTIVE=1 \
+  ROTATE_SKIP_CONFIRM=1 \
+  ROTATE_SKIP_POSTGRES=1 \
+  ROTATE_SKIP_DEPLOY=1 \
+  ROTATE_KIS_PAPER_APP_KEY=hermetic-rotated-paper-key \
+  ROTATE_KIS_PAPER_APP_SECRET=hermetic-rotated-paper-secret \
+  ROTATE_KIS_REAL_APP_KEY='' \
+  ROTATE_KIS_REAL_APP_SECRET='' \
+  ROTATE_TELEGRAM_BOT_TOKEN=hermetic-rotated-telegram \
+    bash "$fake/k8s/scripts/rotate-secrets.sh" > "$fake/rotate.log" 2>&1
+  local rcode=$?
+  set -e
+  if [ "$rcode" != "0" ]; then
+    echo "    rotate-secrets.sh failed (exit $rcode):"
+    sed 's/^/      /' "$fake/rotate.log" | head -40
+    rm -rf "$fake"
+    return 1
+  fi
+
+  # ── 3) 검증: JWT_SECRET 이 64 hex 로 새로 생성되었고 원본과 다른지 ──
+  local new_jwt
+  new_jwt="$(grep '^JWT_SECRET=' "$fake/.env" | cut -d= -f2-)"
+  if [ "$new_jwt" = "$original_jwt" ]; then
+    echo "    JWT_SECRET not rotated (unchanged)"
+    rc=1
+  fi
+  if ! printf '%s' "$new_jwt" | grep -Eq '^[0-9a-f]{64}$'; then
+    echo "    new JWT_SECRET is not 64 hex chars: '$new_jwt'"
+    rc=1
+  fi
+
+  # ── 4) KIS_PAPER_APP_KEY 가 새 값으로 갱신되었는지 ──
+  local new_paper
+  new_paper="$(grep '^KIS_PAPER_APP_KEY=' "$fake/.env" | cut -d= -f2-)"
+  if [ "$new_paper" != "hermetic-rotated-paper-key" ]; then
+    echo "    KIS_PAPER_APP_KEY not updated (got '$new_paper')"
+    rc=1
+  fi
+
+  # ── 5) ROTATE_KIS_REAL_APP_KEY 가 빈 값이면 .env 에 추가되지 않아야 함 ──
+  if grep -q '^KIS_REAL_APP_KEY=' "$fake/.env"; then
+    echo "    KIS_REAL_APP_KEY should not be added when ROTATE_KIS_REAL_APP_KEY is empty"
+    rc=1
+  fi
+
+  # ── 6) ROTATE_SKIP_POSTGRES=1 이면 DATABASE_URL 비번 보존 ──
+  if ! grep -q '^DATABASE_URL=postgresql://alpha_user:hermetic-original-pass@localhost:5432/alpha_db$' "$fake/.env"; then
+    echo "    DATABASE_URL should be unchanged when ROTATE_SKIP_POSTGRES=1"
+    grep '^DATABASE_URL=' "$fake/.env" | sed 's/^/      /'
+    rc=1
+  fi
+
+  # ── 7) .env.bak.* 백업 파일이 생성됨 ──
+  if ! ls "$fake"/.env.bak.* >/dev/null 2>&1; then
+    echo "    .env.bak.* backup file not created"
+    rc=1
+  fi
+
+  # ── 8) 새 enc 파일이 존재하고 decrypt 가능한지 ──
+  local enc_path="$fake/k8s/secrets/app-secret.enc.yaml"
+  if [ ! -f "$enc_path" ]; then
+    echo "    new app-secret.enc.yaml not created by rotation"
+    rc=1
+    rm -rf "$fake"
+    return "$rc"
+  fi
+  local plain="$fake/decrypted.yaml"
+  if ! SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$enc_path" > "$plain" 2>"$fake/decrypt.err"; then
+    echo "    decrypt of rotated enc file failed:"
+    sed 's/^/      /' "$fake/decrypt.err"
+    rm -rf "$fake"
+    return 1
+  fi
+
+  # ── 9) decrypted ENC 에 새 KIS 값이 있고 원래 값은 leak 되지 않음 ──
+  if ! grep -q 'hermetic-rotated-paper-key' "$plain"; then
+    echo "    decrypted ENC missing new KIS_PAPER_APP_KEY value"
+    rc=1
+  fi
+  if grep -q 'hermetic-original-paper-key' "$plain"; then
+    echo "    decrypted ENC still contains original KIS_PAPER_APP_KEY (leak)"
+    rc=1
+  fi
+  if grep -q 'hermetic-original-jwt' "$plain"; then
+    echo "    decrypted ENC still contains original JWT_SECRET (leak)"
+    rc=1
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
 # 10. 암호화 후에도 metadata/kind/type 은 평문이고 stringData.* 는 ENC[...] 로 가려졌는지
 test_sops_yaml_encrypted_regex_only_hits_data_fields() {
   setup_env
@@ -655,7 +813,7 @@ run_test() {
 
 main() {
   check_binaries
-  echo "=== SOPS pipeline unit tests (13 cases) ==="
+  echo "=== SOPS pipeline unit tests (14 cases) ==="
   echo ""
   run_test test_sops_config_has_valid_recipient
   run_test test_app_secret_decrypts_round_trip
@@ -669,6 +827,7 @@ main() {
   run_test test_secrets_bootstrap_quotes_bool_and_int_values
   run_test test_secrets_bootstrap_rewrites_database_url_localhost
   run_test test_rotate_secrets_help_exits_zero
+  run_test test_rotate_secrets_end_to_end_hermetic
   run_test test_sops_yaml_encrypted_regex_only_hits_data_fields
   echo ""
   local total=$((PASS + FAIL))
