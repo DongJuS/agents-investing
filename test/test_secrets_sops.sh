@@ -585,6 +585,28 @@ EOF
   return "$rc"
 }
 
+# 9d. rotate-secrets.sh --help 가 비대화형으로 종료 0 인지
+test_rotate_secrets_help_exits_zero() {
+  local out
+  out="$(mktemp)"
+  set +e
+  bash "$REPO_ROOT/k8s/scripts/rotate-secrets.sh" --help > "$out" 2>&1
+  local code=$?
+  set -e
+  local rc=0
+  if [ "$code" != "0" ]; then
+    echo "    --help should exit 0, got $code"
+    sed 's/^/      /' "$out" | head -10
+    rc=1
+  fi
+  if ! grep -q '사용법:' "$out"; then
+    echo "    --help output missing usage section"
+    rc=1
+  fi
+  rm -f "$out"
+  return "$rc"
+}
+
 # 10. 암호화 후에도 metadata/kind/type 은 평문이고 stringData.* 는 ENC[...] 로 가려졌는지
 test_sops_yaml_encrypted_regex_only_hits_data_fields() {
   setup_env
@@ -633,7 +655,7 @@ run_test() {
 
 main() {
   check_binaries
-  echo "=== SOPS pipeline unit tests (12 cases) ==="
+  echo "=== SOPS pipeline unit tests (13 cases) ==="
   echo ""
   run_test test_sops_config_has_valid_recipient
   run_test test_app_secret_decrypts_round_trip
@@ -646,6 +668,7 @@ main() {
   run_test test_secrets_bootstrap_skips_empty_env_keys
   run_test test_secrets_bootstrap_quotes_bool_and_int_values
   run_test test_secrets_bootstrap_rewrites_database_url_localhost
+  run_test test_rotate_secrets_help_exits_zero
   run_test test_sops_yaml_encrypted_regex_only_hits_data_fields
   echo ""
   local total=$((PASS + FAIL))
