@@ -1,0 +1,538 @@
+#!/bin/bash
+# shellcheck disable=SC2329
+# (test_*/setup_env/teardown_env/make_fake_repo 는 run_test 의 첫 인자
+#  문자열을 통해 간접 호출되어 shellcheck 가 추적하지 못하므로 SC2329 를 끈다.)
+# test/test_secrets_sops.sh — SOPS + age 파이프라인 단위 테스트 (10 cases)
+#
+# 본 테스트는 hermetic: 운영자의 ~/.config/sops/age/keys.txt 와
+# k8s/secrets/app-secret.enc.yaml 을 절대 읽지/쓰지 않는다. 모든 케이스가
+# mktemp -d 로 만든 임시 디렉토리 안에서 자체 age 키와 .sops.yaml 을 만들어
+# round-trip 한다.
+#
+# 사용법:
+#   bash test/test_secrets_sops.sh           # sops/age 미설치면 skip(0)
+#   STRICT=1 bash test/test_secrets_sops.sh  # 미설치 시 hard fail (CI 용)
+#
+# 설계 메모:
+# - bats-core 의존을 피하기 위해 plain bash + 함수 형태로 구현. 각 테스트
+#   함수는 0/1 을 반환하고 run_test 가 카운터를 갱신한다.
+# - 각 테스트는 자기만의 TMP 디렉토리/환경 변수를 setup_env() 로 만들고
+#   teardown_env() 에서 정리한다 (케이스 간 격리).
+# - 케이스 8/9 는 secrets-bootstrap.sh 를 fake repo 트리에 복사해 실행한다.
+#   실제 REPO_ROOT 의 .sops.yaml/k8s/secrets/ 는 절대 건드리지 않는다.
+# - 케이스 6/7 은 deploy-local.sh 를 --skip-build 모드로 실행한다.
+#   --skip-build 는 docker build 만 건너뛰고 SOPS 검증 단계까지 진행해
+#   age key/sops binary 부재로 step [3/6] 에서 exit 1 한다 (kubectl 단계
+#   진입 전에 차단되므로 운영 클러스터에 부수 효과 없음).
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PASS=0
+FAIL=0
+FAILED_NAMES=()
+
+color_red()   { printf '\033[0;31m%s\033[0m' "$1"; }
+color_green() { printf '\033[0;32m%s\033[0m' "$1"; }
+color_yellow(){ printf '\033[0;33m%s\033[0m' "$1"; }
+
+# ── 사전 점검: sops + age 바이너리 ────────────────────────────────────
+check_binaries() {
+  local missing=()
+  for bin in sops age age-keygen; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      missing+=("$bin")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    if [ "${STRICT:-0}" = "1" ]; then
+      color_red "FAIL: missing required binaries: ${missing[*]}"
+      echo ""
+      echo "  STRICT=1 set — install with 'brew install sops age'."
+      exit 1
+    fi
+    color_yellow "SKIP: ${missing[*]} not installed — skipping SOPS unit tests."
+    echo ""
+    echo "  Install with: brew install sops age"
+    echo "  (set STRICT=1 to convert this skip into a hard failure)"
+    exit 0
+  fi
+}
+
+# ── 공통 setup/teardown ─────────────────────────────────────────────
+# setup_env: 임시 디렉토리, 임시 age 키, 임시 .sops.yaml, 샘플 평문/암호문 생성
+# 호출 후 다음 변수를 export 한다:
+#   T_TMPDIR        — 케이스 전용 임시 디렉토리
+#   T_AGE_KEY_FILE  — 새로 생성한 age private key 경로
+#   T_PUBKEY        — 위 키의 public recipient
+#   T_SOPS_CONFIG   — 임시 .sops.yaml (recipient 채워짐)
+#   T_PLAIN_FILE    — 샘플 평문 Secret manifest
+#   T_ENC_FILE      — 위 파일을 SOPS 로 암호화한 결과
+setup_env() {
+  T_TMPDIR="$(mktemp -d -t sops_test.XXXXXX)"
+  T_AGE_KEY_FILE="$T_TMPDIR/keys.txt"
+  T_SOPS_CONFIG="$T_TMPDIR/.sops.yaml"
+  T_PLAIN_FILE="$T_TMPDIR/app-secret.plain.yaml"
+  T_ENC_FILE="$T_TMPDIR/app-secret.enc.yaml"
+
+  age-keygen -o "$T_AGE_KEY_FILE" >/dev/null 2>&1
+  chmod 600 "$T_AGE_KEY_FILE"
+  T_PUBKEY="$(grep -m1 'public key:' "$T_AGE_KEY_FILE" | sed 's/.*: //')"
+
+  cat > "$T_SOPS_CONFIG" <<EOF
+creation_rules:
+  - path_regex: .*\\.enc\\.yaml\$
+    encrypted_regex: '^(data|stringData)\$'
+    age: $T_PUBKEY
+EOF
+
+  cat > "$T_PLAIN_FILE" <<'YAML'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+  namespace: alpha-trading
+type: Opaque
+stringData:
+  JWT_SECRET: hermetic-test-jwt-secret
+  DATABASE_URL: postgresql://alpha_user:hermetic-pass@alpha-pg-postgresql:5432/alpha_db
+  S3_ACCESS_KEY: hermetic-s3-key
+  S3_SECRET_KEY: hermetic-s3-secret
+  KIS_PAPER_APP_KEY: hermetic-kis-app-key
+  KIS_PAPER_APP_SECRET: hermetic-kis-app-secret
+YAML
+
+  # shellcheck disable=SC2094
+  # --filename-override 는 sops 의 creation_rules 매칭용 가짜 경로일 뿐
+  # 실제 입출력 경로와 다르므로 read/write 충돌이 없다.
+  local enc_tmp="$T_TMPDIR/.enc.tmp"
+  SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops \
+    --encrypt \
+    --config "$T_SOPS_CONFIG" \
+    --input-type yaml --output-type yaml \
+    --filename-override "$T_ENC_FILE" \
+    "$T_PLAIN_FILE" > "$enc_tmp"
+  mv "$enc_tmp" "$T_ENC_FILE"
+}
+
+teardown_env() {
+  if [ -n "${T_TMPDIR:-}" ] && [ -d "$T_TMPDIR" ]; then
+    rm -rf "$T_TMPDIR"
+  fi
+  unset T_TMPDIR T_AGE_KEY_FILE T_PUBKEY T_SOPS_CONFIG T_PLAIN_FILE T_ENC_FILE
+}
+
+# ── 가짜 REPO 생성 (case 8, 9 전용) ─────────────────────────────────
+# secrets-bootstrap.sh 는 SCRIPT_DIR 기준 REPO_ROOT 를 계산하므로
+# 임시 트리 안에 k8s/scripts/secrets-bootstrap.sh 를 복사해 둔다.
+make_fake_repo() {
+  local fake="$1"
+  mkdir -p "$fake/k8s/scripts" "$fake/k8s/secrets"
+  cp "$REPO_ROOT/k8s/scripts/secrets-bootstrap.sh" "$fake/k8s/scripts/"
+  chmod +x "$fake/k8s/scripts/secrets-bootstrap.sh"
+  # placeholder 가 들어간 .sops.yaml 을 그대로 복사 (bootstrap 이 치환하는지 확인하기 위함)
+  cp "$REPO_ROOT/.sops.yaml" "$fake/.sops.yaml"
+}
+
+# ── 테스트 케이스들 ──────────────────────────────────────────────────
+
+# 1. .sops.yaml 의 recipient 가 placeholder 가 아닌 실제 age public key 형식인지
+test_sops_config_has_valid_recipient() {
+  setup_env
+  local rc=0
+  # placeholder 문자열 부재
+  if grep -q 'age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' "$T_SOPS_CONFIG"; then
+    echo "    placeholder still present in $T_SOPS_CONFIG"
+    rc=1
+  fi
+  # age1 + 58 chars 형식
+  local r
+  r="$(grep -E 'age:' "$T_SOPS_CONFIG" | head -1 | sed -E 's/.*age:[[:space:]]*//')"
+  if ! printf '%s' "$r" | grep -Eq '^age1[0-9a-z]{58}$'; then
+    echo "    recipient '$r' does not match ^age1[0-9a-z]{58}$"
+    rc=1
+  fi
+  teardown_env
+  return "$rc"
+}
+
+# 2. 암호화→복호화→재암호화→복호화 round-trip 의 평문이 동일한지
+test_app_secret_decrypts_round_trip() {
+  setup_env
+  local rc=0
+  local out1 out2
+  out1="$T_TMPDIR/decrypt1.yaml"
+  out2="$T_TMPDIR/decrypt2.yaml"
+  if ! SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops --decrypt "$T_ENC_FILE" > "$out1" 2>"$T_TMPDIR/err1"; then
+    echo "    first decrypt failed: $(cat "$T_TMPDIR/err1")"
+    teardown_env
+    return 1
+  fi
+  # 재암호화 후 다시 복호화
+  local re_enc="$T_TMPDIR/re-encrypted.enc.yaml"
+  local re_enc_tmp="$T_TMPDIR/re-encrypted.tmp"
+  # shellcheck disable=SC2094
+  SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops \
+    --encrypt --config "$T_SOPS_CONFIG" \
+    --input-type yaml --output-type yaml \
+    --filename-override "$re_enc" \
+    "$out1" > "$re_enc_tmp"
+  mv "$re_enc_tmp" "$re_enc"
+  if ! SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops --decrypt "$re_enc" > "$out2" 2>"$T_TMPDIR/err2"; then
+    echo "    second decrypt failed: $(cat "$T_TMPDIR/err2")"
+    teardown_env
+    return 1
+  fi
+  if ! diff -q "$out1" "$out2" >/dev/null 2>&1; then
+    echo "    round-trip plaintext mismatch"
+    diff "$out1" "$out2" | sed 's/^/      /' | head -10
+    rc=1
+  fi
+  teardown_env
+  return "$rc"
+}
+
+# 3. decrypt 결과의 stringData 에 필수 키가 모두 존재하고 빈 값이 아닌지
+test_app_secret_contains_required_keys() {
+  setup_env
+  local rc=0
+  local plain="$T_TMPDIR/decrypted.yaml"
+  if ! SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops --decrypt "$T_ENC_FILE" > "$plain" 2>/dev/null; then
+    echo "    decrypt failed"
+    teardown_env
+    return 1
+  fi
+  for key in JWT_SECRET DATABASE_URL S3_ACCESS_KEY KIS_PAPER_APP_KEY; do
+    # "KEY: value" 형식이고 value 가 비어있지 않은지
+    if ! grep -E "^[[:space:]]+${key}:[[:space:]]+[^[:space:]]+" "$plain" >/dev/null; then
+      echo "    missing or empty: $key"
+      rc=1
+    fi
+  done
+  teardown_env
+  return "$rc"
+}
+
+# 4. decrypt 결과에 알려진 placeholder 문자열이 포함되어 있지 않은지 (drift 회귀 방지)
+test_app_secret_no_placeholder_values() {
+  setup_env
+  local rc=0
+  local plain="$T_TMPDIR/decrypted.yaml"
+  SOPS_AGE_KEY_FILE="$T_AGE_KEY_FILE" sops --decrypt "$T_ENC_FILE" > "$plain" 2>/dev/null
+  for bad in "change-me" "change-this" "alpha_pass"; do
+    if grep -q "$bad" "$plain"; then
+      echo "    placeholder found in decrypted output: $bad"
+      rc=1
+    fi
+  done
+  teardown_env
+  return "$rc"
+}
+
+# 5. kubectl kustomize k8s/base/ 가 빌드되고 app-secret 이 출력에 포함되지 않는지
+test_kustomize_build_clean_after_secrets_yaml_removed() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    echo "    kubectl not installed — cannot validate kustomize build"
+    return 1
+  fi
+  local out err
+  out="$(mktemp)"
+  err="$(mktemp)"
+  if ! kubectl kustomize "$REPO_ROOT/k8s/base/" > "$out" 2>"$err"; then
+    echo "    kustomize build failed:"
+    sed 's/^/      /' "$err"
+    rm -f "$out" "$err"
+    return 1
+  fi
+  local rc=0
+  # app-secret 이라는 이름의 Secret 리소스가 만들어지면 안 됨
+  # (envFrom 의 secretRef 는 별도의 metadata.name 이 아니라 OK)
+  # awk 로 "kind: Secret" 블록의 metadata.name 만 추출.
+  local names
+  names="$(awk '
+    /^---/ { kind=""; name=""; next }
+    /^kind:/ { kind=$2 }
+    /^metadata:/ { in_meta=1; next }
+    in_meta && /^  name:/ { if (kind=="Secret") print $2; in_meta=0 }
+    /^[a-zA-Z]/ && !/^kind:/ && !/^metadata:/ { in_meta=0 }
+  ' "$out")"
+  if echo "$names" | grep -q '^app-secret$'; then
+    echo "    'app-secret' Secret should NOT be in kustomize output"
+    rc=1
+  fi
+  if ! echo "$names" | grep -q '^llm-credentials$'; then
+    echo "    'llm-credentials' Secret missing from kustomize output (secretGenerator broken?)"
+    rc=1
+  fi
+  rm -f "$out" "$err"
+  return "$rc"
+}
+
+# 6. age private key 미존재 시 deploy-local.sh 가 step [3/6] 에서 exit 1 하는지
+test_deploy_script_aborts_without_age_key() {
+  local fake_key="/tmp/no_age_$$_$RANDOM/keys.txt"
+  local out err
+  out="$(mktemp)"
+  err="$(mktemp)"
+  # SOPS_AGE_KEY_FILE 을 존재하지 않는 경로로 가리켜 step 3 에서 abort
+  set +e
+  SOPS_AGE_KEY_FILE="$fake_key" \
+    bash "$REPO_ROOT/k8s/scripts/deploy-local.sh" --skip-build > "$out" 2> "$err"
+  local code=$?
+  set -e
+  local rc=0
+  if [ "$code" = "0" ]; then
+    echo "    expected non-zero exit, got $code"
+    rc=1
+  fi
+  if ! grep -q 'age private key 미존재' "$err"; then
+    echo "    expected 'age private key 미존재' on stderr"
+    sed 's/^/      err: /' "$err" | head -10
+    rc=1
+  fi
+  rm -f "$out" "$err"
+  return "$rc"
+}
+
+# 7. sops 바이너리 미설치(=PATH 에서 제외) 시 deploy-local.sh 가 abort 하는지
+test_deploy_script_aborts_without_sops_binary() {
+  local out err
+  out="$(mktemp)"
+  err="$(mktemp)"
+  # PATH 에서 sops 를 제외 (git/docker 는 /usr/bin 또는 /usr/local/bin 에서 잡힘)
+  set +e
+  PATH="/usr/bin:/bin:/usr/local/bin" \
+    bash "$REPO_ROOT/k8s/scripts/deploy-local.sh" --skip-build > "$out" 2> "$err"
+  local code=$?
+  set -e
+  local rc=0
+  if [ "$code" = "0" ]; then
+    echo "    expected non-zero exit, got $code"
+    rc=1
+  fi
+  if ! grep -q 'sops binary 미설치' "$err"; then
+    echo "    expected 'sops binary 미설치' on stderr"
+    sed 's/^/      err: /' "$err" | head -10
+    rc=1
+  fi
+  rm -f "$out" "$err"
+  return "$rc"
+}
+
+# 8. secrets-bootstrap.sh 가 두 번 연속 실행해도 멱등인지
+test_secrets_bootstrap_is_idempotent() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  # hermetic age key + .env
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+  cat > "$fake/.env" <<'EOF'
+JWT_SECRET=hermetic-jwt
+DATABASE_URL=postgresql://u:p@host/db
+S3_ACCESS_KEY=hermetic-s3
+S3_SECRET_KEY=hermetic-s3-secret
+KIS_PAPER_APP_KEY=hermetic-kis-app
+EOF
+
+  local rc=0
+  local first_log second_log
+  first_log="$fake/first.log"
+  second_log="$fake/second.log"
+
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$first_log" 2>&1
+  local code1=$?
+  set -e
+  if [ "$code1" != "0" ]; then
+    echo "    first bootstrap run failed (exit $code1):"
+    sed 's/^/      /' "$first_log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  # snapshot
+  local enc_path="$fake/k8s/secrets/app-secret.enc.yaml"
+  local enc_hash1 sops_hash1
+  enc_hash1="$(shasum "$enc_path" | awk '{print $1}')"
+  sops_hash1="$(shasum "$fake/.sops.yaml" | awk '{print $1}')"
+  local enc_mtime1
+  enc_mtime1="$(stat -f '%m' "$enc_path" 2>/dev/null || stat -c '%Y' "$enc_path")"
+
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$second_log" 2>&1
+  local code2=$?
+  set -e
+  if [ "$code2" != "0" ]; then
+    echo "    second bootstrap run failed (exit $code2):"
+    sed 's/^/      /' "$second_log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  local enc_hash2 sops_hash2
+  enc_hash2="$(shasum "$enc_path" | awk '{print $1}')"
+  sops_hash2="$(shasum "$fake/.sops.yaml" | awk '{print $1}')"
+  local enc_mtime2
+  enc_mtime2="$(stat -f '%m' "$enc_path" 2>/dev/null || stat -c '%Y' "$enc_path")"
+
+  if [ "$enc_hash1" != "$enc_hash2" ]; then
+    echo "    enc file content changed across runs ($enc_hash1 -> $enc_hash2)"
+    rc=1
+  fi
+  if [ "$sops_hash1" != "$sops_hash2" ]; then
+    echo "    .sops.yaml changed across runs ($sops_hash1 -> $sops_hash2)"
+    rc=1
+  fi
+  if [ "$enc_mtime1" != "$enc_mtime2" ]; then
+    echo "    enc file was rewritten on second run (mtime $enc_mtime1 -> $enc_mtime2)"
+    rc=1
+  fi
+
+  # 두 번째 실행 로그에 'skip' 표시가 있어야 함
+  if ! grep -q 'skip' "$second_log"; then
+    echo "    second run did not log 'skip' for any step"
+    sed 's/^/      /' "$second_log" | head -20
+    rc=1
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
+# 9. .env 의 빈 값 키는 ENC 파일에 들어가지 않는지
+test_secrets_bootstrap_skips_empty_env_keys() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+
+  # KIS_REAL_APP_KEY 는 빈 값 — ENC 파일에 들어가면 안 됨
+  cat > "$fake/.env" <<'EOF'
+JWT_SECRET=hermetic-jwt
+DATABASE_URL=postgresql://u:p@host/db
+S3_ACCESS_KEY=hermetic-s3
+S3_SECRET_KEY=hermetic-s3-secret
+KIS_PAPER_APP_KEY=hermetic-kis-app
+KIS_REAL_APP_KEY=
+KIS_REAL_APP_SECRET=
+KIS_REAL_ACCOUNT_NUMBER=
+EOF
+
+  local rc=0
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$fake/log" 2>&1
+  local code=$?
+  set -e
+  if [ "$code" != "0" ]; then
+    echo "    bootstrap run failed (exit $code):"
+    sed 's/^/      /' "$fake/log" | head -20
+    rm -rf "$fake"
+    return 1
+  fi
+
+  local enc_path="$fake/k8s/secrets/app-secret.enc.yaml"
+  local plain="$fake/decrypted.yaml"
+  SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$enc_path" > "$plain" 2>/dev/null
+
+  for empty_key in KIS_REAL_APP_KEY KIS_REAL_APP_SECRET KIS_REAL_ACCOUNT_NUMBER; do
+    if grep -q "^[[:space:]]*${empty_key}:" "$plain"; then
+      echo "    empty .env key '$empty_key' should not appear in decrypted ENC"
+      rc=1
+    fi
+  done
+  # 살아있는 키는 잘 들어가야 함 (sanity)
+  if ! grep -q '^[[:space:]]*JWT_SECRET:' "$plain"; then
+    echo "    JWT_SECRET missing from decrypted ENC (regression)"
+    rc=1
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
+# 10. 암호화 후에도 metadata/kind/type 은 평문이고 stringData.* 는 ENC[...] 로 가려졌는지
+test_sops_yaml_encrypted_regex_only_hits_data_fields() {
+  setup_env
+  local rc=0
+  # 평문이어야 할 메타 필드들
+  for plain_field in 'kind: Secret' 'name: app-secret' 'namespace: alpha-trading' 'type: Opaque'; do
+    if ! grep -q "$plain_field" "$T_ENC_FILE"; then
+      echo "    expected plaintext '$plain_field' missing from encrypted file"
+      rc=1
+    fi
+  done
+  # stringData 키 이름은 평문, 값은 ENC[ 로 시작
+  for key in JWT_SECRET DATABASE_URL S3_ACCESS_KEY S3_SECRET_KEY KIS_PAPER_APP_KEY; do
+    if ! grep -E "^[[:space:]]+${key}:[[:space:]]+ENC\\[" "$T_ENC_FILE" >/dev/null; then
+      echo "    stringData.${key} not encrypted (expected ENC[...])"
+      rc=1
+    fi
+  done
+  # 평문 값이 새어나가지 않았는지
+  if grep -q 'hermetic-test-jwt-secret' "$T_ENC_FILE"; then
+    echo "    plaintext JWT value leaked into encrypted file"
+    rc=1
+  fi
+  teardown_env
+  return "$rc"
+}
+
+# ── 러너 ────────────────────────────────────────────────────────────
+run_test() {
+  local name="$1"
+  local logfile
+  logfile="$(mktemp -t sops_test_log.XXXXXX)"
+  if "$name" > "$logfile" 2>&1; then
+    color_green "  PASS"
+    printf ': %s\n' "$name"
+    PASS=$((PASS + 1))
+  else
+    color_red "  FAIL"
+    printf ': %s\n' "$name"
+    sed 's/^/      /' "$logfile"
+    FAIL=$((FAIL + 1))
+    FAILED_NAMES+=("$name")
+  fi
+  rm -f "$logfile"
+}
+
+main() {
+  check_binaries
+  echo "=== SOPS pipeline unit tests (10 cases) ==="
+  echo ""
+  run_test test_sops_config_has_valid_recipient
+  run_test test_app_secret_decrypts_round_trip
+  run_test test_app_secret_contains_required_keys
+  run_test test_app_secret_no_placeholder_values
+  run_test test_kustomize_build_clean_after_secrets_yaml_removed
+  run_test test_deploy_script_aborts_without_age_key
+  run_test test_deploy_script_aborts_without_sops_binary
+  run_test test_secrets_bootstrap_is_idempotent
+  run_test test_secrets_bootstrap_skips_empty_env_keys
+  run_test test_sops_yaml_encrypted_regex_only_hits_data_fields
+  echo ""
+  local total=$((PASS + FAIL))
+  if [ "$FAIL" -gt 0 ]; then
+    color_red "=== $total tests, $PASS passed, $FAIL failed ==="
+    echo ""
+    for n in "${FAILED_NAMES[@]}"; do
+      echo "  - $n"
+    done
+    exit 1
+  fi
+  color_green "=== $total tests, $PASS passed ==="
+  echo ""
+  exit 0
+}
+
+main "$@"
