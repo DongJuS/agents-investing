@@ -93,6 +93,7 @@ fi
 
 # postgres pod 존재 + 살아있음 확인 (이름은 동적으로 찾는다)
 PG_POD=""
+PG_SUPER_PW=""
 if [ "$ROTATE_SKIP_POSTGRES" = "1" ]; then
   say "  postgres 사전 검증 스킵 (ROTATE_SKIP_POSTGRES=1)"
 else
@@ -104,6 +105,11 @@ else
   PG_PHASE="$(kubectl get pod "$PG_POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   [ "$PG_PHASE" = "Running" ] || fail "postgres pod ($PG_POD) 가 Running 상태가 아닙니다 (현재: $PG_PHASE)"
   say "  postgres pod: $PG_POD ($PG_PHASE)"
+
+  # Bitnami postgresql 차트는 postgres 슈퍼유저에게 비번을 강제한다.
+  # ALTER USER 를 실행하려면 secret 에서 superuser 비번을 읽어 PGPASSWORD 로 넘겨야 함.
+  PG_SUPER_PW="$(kubectl get secret -n "$NAMESPACE" alpha-pg-postgresql -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  [ -n "$PG_SUPER_PW" ] || fail "postgres superuser 비번을 secret 에서 찾지 못함 (alpha-pg-postgresql/postgres-password)"
 fi
 
 # .sops.yaml 의 recipient 가 placeholder 가 아닌지 확인
@@ -181,6 +187,18 @@ else
   echo "  → @BotFather → /revoke → /newtoken → 봇 선택 후 붙여넣기"
   printf "  TELEGRAM_BOT_TOKEN    : "
   read -rs TELEGRAM_BOT_TOKEN_NEW; echo
+
+  # 입력에서 control character (ESC/CR/탭/NUL 등) 제거.
+  # 사고 사례: 사용자가 'Enter 만 쳤다' 고 인식했지만 실제로는 화살표/ESC 키가
+  # 한 번 눌려 0x1b 1바이트가 입력값으로 잡혔고, Python rewriter 가 "비어있지
+  # 않음" 으로 판단해 .env 의 원래 값을 0x1b 로 덮어써 SOPS YAML 인코딩 단계
+  # ('control characters are not allowed') 에서 사고 발생. (2026-04-08)
+  for var in KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
+             KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW \
+             TELEGRAM_BOT_TOKEN_NEW; do
+    cleaned="$(printf '%s' "${!var}" | LC_ALL=C tr -d '[:cntrl:]')"
+    printf -v "$var" '%s' "$cleaned"
+  done
 fi
 
 # ── 5. JWT_SECRET 재생성 ───────────────────────────────────────────
@@ -197,22 +215,27 @@ else
   say "[6/11] postgres alpha_user 비밀번호 재생성 + ALTER USER"
   PG_PW_NEW="$(openssl rand -hex 24)"
   echo "  새 비번 생성. ALTER USER 실행..."
-  if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
-       psql -U postgres -d alpha_db -v ON_ERROR_STOP=1 \
-       -c "ALTER USER alpha_user PASSWORD '$PG_PW_NEW'" >/dev/null 2>&1; then
+  ALTER_ERR="$(kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
+       env "PGPASSWORD=$PG_SUPER_PW" psql -U postgres -d alpha_db -v ON_ERROR_STOP=1 \
+       -c "ALTER USER alpha_user PASSWORD '$PG_PW_NEW'" 2>&1 >/dev/null)" || {
     unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
-          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
+          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW PG_SUPER_PW
+    echo "  ── psql stderr ──" >&2
+    printf '%s\n' "$ALTER_ERR" | sed 's/^/    /' >&2
     fail "ALTER USER 실패. 원래 .env 그대로. 백업: $BACKUP_FILE"
-  fi
+  }
 
   # 새 비번이 실제로 통하는지 검증
-  if ! kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
+  VERIFY_ERR="$(kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
        env "PGPASSWORD=$PG_PW_NEW" psql -h localhost -U alpha_user -d alpha_db \
-       -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
+       -v ON_ERROR_STOP=1 -c "SELECT 1" 2>&1 >/dev/null)" || {
     unset PG_PW_NEW JWT_SECRET_NEW KIS_PAPER_APP_KEY_NEW KIS_PAPER_APP_SECRET_NEW \
-          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW
+          KIS_REAL_APP_KEY_NEW KIS_REAL_APP_SECRET_NEW TELEGRAM_BOT_TOKEN_NEW PG_SUPER_PW
+    echo "  ── psql stderr ──" >&2
+    printf '%s\n' "$VERIFY_ERR" | sed 's/^/    /' >&2
     fail "ALTER USER 후 새 비번 검증 실패. 수동 복구 필요. 백업: $BACKUP_FILE"
-  fi
+  }
+  unset PG_SUPER_PW
   echo "  ✓ ALTER USER 성공 + 새 비번 검증 OK"
 fi
 

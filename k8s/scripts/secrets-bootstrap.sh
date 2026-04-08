@@ -87,12 +87,18 @@ YAML
              KIS_IS_PAPER_TRADING KIS_PAPER_APP_KEY KIS_PAPER_APP_SECRET KIS_PAPER_ACCOUNT_NUMBER \
              KIS_REAL_APP_KEY KIS_REAL_APP_SECRET KIS_REAL_ACCOUNT_NUMBER REAL_TRADING_CONFIRMATION_CODE \
              TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-    val="$(grep -E "^${key}=" "$ENV_FILE" | head -1 | cut -d'=' -f2- || true)"
+    # -a 로 binary mode 회피: .env 에 우연히 NUL 등 이 박혀도 텍스트로 취급해서
+    # 라인을 정상적으로 뽑아낸다. 뒤이어 control char strip 을 거치므로 안전.
+    val="$(grep -aE "^${key}=" "$ENV_FILE" | head -1 | cut -d'=' -f2- || true)"
     # 양 끝의 따옴표 제거
     val="${val%\"}"
     val="${val#\"}"
     val="${val%\'}"
     val="${val#\'}"
+    # 방어적 sanitization: control character (CR/LF/탭/ESC/NUL 등) 제거.
+    # SOPS 가 'control characters are not allowed' 로 거부하는 사고 방지.
+    # secret 값은 원천적으로 printable ASCII 라 손해 없음. (2026-04-08)
+    val="$(printf '%s' "$val" | LC_ALL=C tr -d '[:cntrl:]')"
     if [ -z "$val" ]; then
       continue
     fi

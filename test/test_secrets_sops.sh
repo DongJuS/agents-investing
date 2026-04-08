@@ -585,6 +585,93 @@ EOF
   return "$rc"
 }
 
+# 9d-pre. secrets-bootstrap.sh 가 .env 의 control character (ESC/CR/탭/NUL 등) 를
+#         strip 한 뒤 SOPS 인코딩에 성공하는지. 회귀 가드: 2026-04-08 사고에서
+#         사용자가 read -rs 프롬프트에 ESC(0x1b) 를 1바이트로 입력하면서
+#         KIS_PAPER_APP_KEY 가 0x1b 로 덮어써졌고, SOPS 가 'control characters
+#         are not allowed' 로 폴더링.
+test_secrets_bootstrap_strips_control_chars_from_env() {
+  local fake
+  fake="$(mktemp -d -t fake_repo.XXXXXX)"
+  make_fake_repo "$fake"
+
+  local age_key="$fake/age_keys.txt"
+  age-keygen -o "$age_key" >/dev/null 2>&1
+  chmod 600 "$age_key"
+
+  # .env 에 일부러 control char 를 박는다:
+  #   - KIS_PAPER_APP_KEY: ESC(0x1b) + 정상 hex
+  #   - KIS_PAPER_APP_SECRET: NUL(0x00) + 정상 hex
+  #   - TELEGRAM_BOT_TOKEN: CR(\r) 만 → strip 후 빈 값 → 누락되어야 함
+  python3 - "$fake/.env" <<'PY'
+import sys
+path = sys.argv[1]
+lines = [
+    "JWT_SECRET=hermetic-jwt\n",
+    "DATABASE_URL=postgresql://alpha_user:hermetic@alpha-pg-postgresql:5432/alpha_db\n",
+    "KIS_PAPER_APP_KEY=\x1bcleanafterescape123456789012345678\n",
+    "KIS_PAPER_APP_SECRET=\x00cleanafternul12345678901234567890\n",
+    "KIS_PAPER_ACCOUNT_NUMBER=50000000\n",
+    "TELEGRAM_BOT_TOKEN=\r\n",
+]
+with open(path, "wb") as f:
+    f.writelines(line.encode("latin-1") for line in lines)
+PY
+
+  local rc=0
+  set +e
+  SOPS_AGE_KEY_FILE="$age_key" ENV_FILE="$fake/.env" \
+    bash "$fake/k8s/scripts/secrets-bootstrap.sh" > "$fake/log" 2>&1
+  local code=$?
+  set -e
+  if [ "$code" != "0" ]; then
+    echo "    bootstrap failed (exit $code) — should have stripped ctrl chars and succeeded:"
+    sed 's/^/      /' "$fake/log" | head -30
+    rm -rf "$fake"
+    return 1
+  fi
+
+  local plain="$fake/decrypted.yaml"
+  if ! SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$fake/k8s/secrets/app-secret.enc.yaml" > "$plain" 2>"$fake/dec.log"; then
+    echo "    sops --decrypt failed:"
+    sed 's/^/      /' "$fake/dec.log"
+    rm -rf "$fake"
+    return 1
+  fi
+
+  # ESC/NUL 가 ENC 에 살아남아 있으면 안 됨 (python 으로 바이트 검사)
+  if python3 -c "
+import sys
+data = open(sys.argv[1], 'rb').read()
+bad = [hex(b) for b in set(data) if b < 0x20 and b not in (0x09, 0x0a, 0x0d)]
+sys.exit(1 if bad else 0)
+" "$plain"; then
+    : # ok
+  else
+    echo "    decrypted yaml still contains control characters"
+    rc=1
+  fi
+  # ESC 뒤의 정상 부분은 보존되어야 함
+  if ! grep -q 'cleanafterescape123456789012345678' "$plain"; then
+    echo "    KIS_PAPER_APP_KEY clean tail not preserved after strip"
+    grep KIS_PAPER_APP_KEY "$plain" | sed 's/^/      /'
+    rc=1
+  fi
+  if ! grep -q 'cleanafternul12345678901234567890' "$plain"; then
+    echo "    KIS_PAPER_APP_SECRET clean tail not preserved after strip"
+    rc=1
+  fi
+  # CR 만 있던 키는 strip 후 빈 값 → ENC 에서 누락되어야 함
+  if grep -q '^[[:space:]]*TELEGRAM_BOT_TOKEN:' "$plain"; then
+    echo "    TELEGRAM_BOT_TOKEN should be skipped when value is only control chars"
+    grep TELEGRAM_BOT_TOKEN "$plain" | sed 's/^/      /'
+    rc=1
+  fi
+
+  rm -rf "$fake"
+  return "$rc"
+}
+
 # 9d. rotate-secrets.sh --help 가 비대화형으로 종료 0 인지
 test_rotate_secrets_help_exits_zero() {
   local out
@@ -813,7 +900,7 @@ run_test() {
 
 main() {
   check_binaries
-  echo "=== SOPS pipeline unit tests (14 cases) ==="
+  echo "=== SOPS pipeline unit tests (15 cases) ==="
   echo ""
   run_test test_sops_config_has_valid_recipient
   run_test test_app_secret_decrypts_round_trip
@@ -826,6 +913,7 @@ main() {
   run_test test_secrets_bootstrap_skips_empty_env_keys
   run_test test_secrets_bootstrap_quotes_bool_and_int_values
   run_test test_secrets_bootstrap_rewrites_database_url_localhost
+  run_test test_secrets_bootstrap_strips_control_chars_from_env
   run_test test_rotate_secrets_help_exits_zero
   run_test test_rotate_secrets_end_to_end_hermetic
   run_test test_sops_yaml_encrypted_regex_only_hits_data_fields
