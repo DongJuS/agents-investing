@@ -19,6 +19,14 @@ GitHub 관련 지침은 `.github/README.md`부터 읽는다.
 
 ---
 
+## 🔐 Secret 관리
+
+Cluster Secret 은 SOPS + age 로 관리한다 (`k8s/secrets/*.enc.yaml`).
+운영 가이드: `docs/secrets.md`. 부트스트랩: `bash k8s/scripts/secrets-bootstrap.sh`.
+**평문 secret 을 git 에 절대 커밋하지 않는다.**
+
+---
+
 ## 🧭 에이전트 행동 규칙
 
 1. **작업 시작 전** `progress.md`를 읽고 현재 상태를 파악한다.
