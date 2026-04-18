@@ -69,7 +69,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 echo "[1/4] ONS topic '$TOPIC_NAME' 확인..."
-TOPIC_ID=$(oci "${REGION_ARG[@]}" ons topic list \
+TOPIC_ID=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} ons topic list \
     --compartment-id "$OCI_COMPARTMENT_OCID" \
     --name "$TOPIC_NAME" \
     --lifecycle-state ACTIVE \
@@ -77,20 +77,18 @@ TOPIC_ID=$(oci "${REGION_ARG[@]}" ons topic list \
 
 if [[ -z "$TOPIC_ID" ]]; then
     echo "  -> topic 미존재. 생성 중..."
-    TOPIC_ID=$(oci "${REGION_ARG[@]}" ons topic create \
+    TOPIC_ID=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} ons topic create \
         --name "$TOPIC_NAME" \
         --compartment-id "$OCI_COMPARTMENT_OCID" \
         --description "alpha-financial-pipeline 운영 알림" \
-        --wait-for-state ACTIVE \
-        --query 'data."topic-id"' \
-        --raw-output)
+        2>&1 | jq -r '.data."topic-id" // empty')
     echo "  ✓ topic 생성: $TOPIC_ID"
 else
     echo "  ✓ 이미 존재: $TOPIC_ID"
 fi
 
 echo "[2/4] Email subscription '$OCI_ALERT_EMAIL' 확인..."
-EXISTING_SUB=$(oci "${REGION_ARG[@]}" ons subscription list \
+EXISTING_SUB=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} ons subscription list \
     --compartment-id "$OCI_COMPARTMENT_OCID" \
     --topic-id "$TOPIC_ID" \
     --all 2>/dev/null | jq -r \
@@ -100,7 +98,7 @@ EXISTING_SUB=$(oci "${REGION_ARG[@]}" ons subscription list \
 
 if [[ -z "$EXISTING_SUB" ]]; then
     echo "  -> subscription 미존재. 생성 중... (확인 이메일 1회 클릭 필요)"
-    oci "${REGION_ARG[@]}" ons subscription create \
+    oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} ons subscription create \
         --compartment-id "$OCI_COMPARTMENT_OCID" \
         --topic-id "$TOPIC_ID" \
         --protocol EMAIL \
@@ -117,7 +115,7 @@ ensure_alarm() {
     local severity="$3"
 
     local existing_id
-    existing_id=$(oci "${REGION_ARG[@]}" monitoring alarm list \
+    existing_id=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} monitoring alarm list \
         --compartment-id "$OCI_COMPARTMENT_OCID" \
         --display-name "$display_name" \
         --all 2>/dev/null | jq -r '.data[0].id // empty')
@@ -128,7 +126,7 @@ ensure_alarm() {
     fi
 
     echo "  -> '$display_name' 생성 중..."
-    oci "${REGION_ARG[@]}" monitoring alarm create \
+    oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} monitoring alarm create \
         --compartment-id "$OCI_COMPARTMENT_OCID" \
         --display-name "$display_name" \
         --metric-compartment-id "$OCI_COMPARTMENT_OCID" \
@@ -160,7 +158,7 @@ ensure_alarm \
 
 echo "[4/4] Monthly budget + alert rule 세팅..."
 BUDGET_DISPLAY="alpha-monthly-budget"
-BUDGET_ID=$(oci "${REGION_ARG[@]}" budgets budget list \
+BUDGET_ID=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} budgets budget list \
     --compartment-id "$OCI_TENANCY_OCID" \
     --target-type COMPARTMENT \
     --display-name "$BUDGET_DISPLAY" \
@@ -168,7 +166,7 @@ BUDGET_ID=$(oci "${REGION_ARG[@]}" budgets budget list \
 
 if [[ -z "$BUDGET_ID" ]]; then
     echo "  -> budget 미존재. 생성 중 (\$$BUDGET_AMOUNT/월 타겟)..."
-    BUDGET_ID=$(oci "${REGION_ARG[@]}" budgets budget create \
+    BUDGET_ID=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} budgets budget create \
         --compartment-id "$OCI_TENANCY_OCID" \
         --display-name "$BUDGET_DISPLAY" \
         --amount "$BUDGET_AMOUNT" \
@@ -184,7 +182,7 @@ else
 fi
 
 ALERT_DISPLAY="alpha-any-spend"
-EXISTING_ALERT=$(oci "${REGION_ARG[@]}" budgets alert-rule list \
+EXISTING_ALERT=$(oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} budgets alert-rule list \
     --budget-id "$BUDGET_ID" \
     --all 2>/dev/null | jq -r \
         --arg name "$ALERT_DISPLAY" \
@@ -193,7 +191,7 @@ EXISTING_ALERT=$(oci "${REGION_ARG[@]}" budgets alert-rule list \
 
 if [[ -z "$EXISTING_ALERT" ]]; then
     echo "  -> alert rule 생성 중 (>=$BUDGET_THRESHOLD% 지출 시 이메일)..."
-    oci "${REGION_ARG[@]}" budgets alert-rule create \
+    oci ${REGION_ARG[@]+"${REGION_ARG[@]}"} budgets alert-rule create \
         --budget-id "$BUDGET_ID" \
         --display-name "$ALERT_DISPLAY" \
         --type ACTUAL \

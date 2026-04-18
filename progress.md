@@ -146,7 +146,7 @@ Phase 0 완료 (PR #178~#180). 분봉 데이터 축적 시작.
 
 ### ✅ 클라우드 마이그레이션 완료 (2026-04-17, PR #190~#192)
 
-**서버:** Oracle Cloud ARM64 (152.67.223.37, ubuntu, 4 OCPU/24GB, 200GB).
+**서버:** Oracle Cloud ARM64 (134.185.110.214, reserved IP, ubuntu, 4 OCPU/24GB, 200GB).
 **배포:** `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` (prod override).
 **스토리지:** Cloudflare R2 (`alpha-datalake` 버킷, S3v4). MinIO는 `--profile minio-local`로 폴백.
 **LLM 인증:** CLI/OAuth 마운트 (`~/.claude`, `~/.codex`, `~/.config/gcloud`) + `CLAUDE_CODE_OAUTH_TOKEN` 환경변수. OpenAI는 더미 key(미사용).
