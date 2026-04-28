@@ -155,6 +155,7 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME}
       S3_REGION: ${S3_REGION:-auto}
+      KIS_IS_PAPER_TRADING: "true"
     deploy:
       resources:
         limits:
@@ -197,6 +198,7 @@ services:
       # 안정성을 위해 학습은 로컬에서 수행, 서버는 추론만.
       # K3s에서도 동일 설정: k8s/overlays/prod/patches/worker-env.yaml
       ORCH_ENABLE_RL_AUTO_RETRAIN: "false"
+      KIS_IS_PAPER_TRADING: "true"
     deploy:
       resources:
         limits:
@@ -233,6 +235,7 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME}
       S3_REGION: ${S3_REGION:-auto}
+      KIS_IS_PAPER_TRADING: "false"
     deploy:
       resources:
         limits:
