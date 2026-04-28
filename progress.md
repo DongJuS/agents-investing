@@ -29,6 +29,15 @@
 
 ## ✅ 최근 완료
 
+### 서버 코호스팅 준비 + KIS 방어 코드 (2026-04-18)
+
+**IP 전환:** ephemeral 152.67.223.37 → reserved 134.185.110.214. 리사이징 시도("Out of host capacity") 실패 후 동거 결정.
+**리소스 증가:** 트레이딩 ~3.25GB → ~7.75GB (postgres 1.5G, worker 3G, api 2G).
+**디스크 모니터링:** `scripts/oci/disk_monitor.sh` — Docker 볼륨 50GB 초과 시 Telegram 알림. 매일 09:00 KST 크론.
+**KIS approval 방어:** invalid approval 감지 → 캐시 삭제 → 1회 재발급 → Telegram 알림. 테스트 11개.
+**OpenClaw 준비:** ~/openclaw/ 디렉토리 생성 완료.
+- 상세: `.agent/discussions/20260418-server-cohosting-plan.md`
+
 ### 클라우드 LLM 인증·비용 전략 구현 (2026-04-13)
 
 CLI 구독 인증 1순위 + API Key SDK 자동 fallback + 1분 주기 Health 감시.
@@ -146,7 +155,7 @@ Phase 0 완료 (PR #178~#180). 분봉 데이터 축적 시작.
 
 ### ✅ 클라우드 마이그레이션 완료 (2026-04-17, PR #190~#192)
 
-**서버:** Oracle Cloud ARM64 (152.67.223.37, ubuntu, 4 OCPU/24GB, 200GB).
+**서버:** Oracle Cloud ARM64 (134.185.110.214, reserved IP, ubuntu, 4 OCPU/24GB, 200GB).
 **배포:** `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` (prod override).
 **스토리지:** Cloudflare R2 (`alpha-datalake` 버킷, S3v4). MinIO는 `--profile minio-local`로 폴백.
 **LLM 인증:** CLI/OAuth 마운트 (`~/.claude`, `~/.codex`, `~/.config/gcloud`) + `CLAUDE_CODE_OAUTH_TOKEN` 환경변수. OpenAI는 더미 key(미사용).
